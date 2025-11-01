@@ -39,7 +39,7 @@ class MCPTodoAPI:
         Returns:
             List of task dictionaries
         """
-        tasks = db.get_available_tasks_for_agent(agent_type, project_id=project_id, limit=limit)
+        tasks = get_db().get_available_tasks_for_agent(agent_type, project_id=project_id, limit=limit)
         return [dict(task) for task in tasks]
     
     @staticmethod
@@ -54,11 +54,11 @@ class MCPTodoAPI:
         Returns:
             Task dictionary if successful, None if already locked
         """
-        success = db.lock_task(task_id, agent_id)
+        success = get_db().lock_task(task_id, agent_id)
         if not success:
             return {"success": False, "error": "Task is not available (already locked or different status)"}
         
-        task = db.get_task(task_id)
+        task = get_db().get_task(task_id)
         return {"success": True, "task": dict(task)}
     
     @staticmethod
@@ -150,7 +150,7 @@ class MCPTodoAPI:
         Returns:
             Dictionary with created task ID and optional relationship ID
         """
-        task_id = db.create_task(
+        task_id = get_db().create_task(
             title=title,
             task_type=task_type,
             task_instruction=task_instruction,
@@ -194,7 +194,7 @@ class MCPTodoAPI:
         Returns:
             Dictionary with agent performance statistics
         """
-        stats = db.get_agent_stats(agent_id, task_type)
+        stats = get_db().get_agent_stats(agent_id, task_type)
         return stats
 
 

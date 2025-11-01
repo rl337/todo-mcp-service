@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from database import TodoDatabase, TaskType, TaskStatus, VerificationStatus, RelationshipType
-from mcp_api import MCPTodoAPI, MCP_FUNCTIONS
+from mcp_api import MCPTodoAPI, MCP_FUNCTIONS, set_db
 from backup import BackupManager, BackupScheduler
 
 # Setup logging
@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # Initialize database
 db_path = os.getenv("TODO_DB_PATH", "/app/data/todos.db")
 db = TodoDatabase(db_path)
+
+# Initialize MCP API with database
+set_db(db)
 
 # Initialize backup manager
 backups_dir = os.getenv("TODO_BACKUPS_DIR", "/app/backups")
