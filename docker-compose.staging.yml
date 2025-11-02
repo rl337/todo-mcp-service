@@ -1,0 +1,31 @@
+services:
+  todo-mcp-service-staging:
+    build:
+      context: .
+      dockerfile: src/Dockerfile
+    container_name: todo-mcp-service-staging
+    restart: unless-stopped
+    ports:
+      - "${STAGING_PORT:-8005}:8004"
+    environment:
+      - DB_TYPE=${DB_TYPE:-sqlite}
+      - TODO_DB_PATH=/app/data/todos_staging.db
+      - TODO_BACKUPS_DIR=/app/backups
+      - TODO_SERVICE_PORT=8004
+      - TODO_BACKUP_INTERVAL_HOURS=24
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - ENVIRONMENT=staging
+    volumes:
+      - ${STAGING_DATA_DIR:-./data/staging}:/app/data
+      - ${STAGING_BACKUPS_DIR:-./backups/staging}:/app/backups
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - staging-network
+
+networks:
+  staging-network:
+    driver: bridge
