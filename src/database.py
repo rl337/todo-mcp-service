@@ -423,6 +423,78 @@ class TodoDatabase:
             """)
             self._execute_with_logging(cursor, query)
             
+            # Migration: Fix change_history CHECK constraint if it doesn't include update types
+            # SQLite doesn't support ALTER TABLE to modify CHECK constraints, so we need to recreate
+            if self.db_type == "sqlite":
+                try:
+                    # Test if the constraint allows 'progress' type by checking the schema
+                    cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='change_history'")
+                    schema_row = cursor.fetchone()
+                    if schema_row and schema_row[0] and "'progress'" not in schema_row[0]:
+                        # Table exists but doesn't have the new constraint - need to migrate
+                        raise sqlite3.IntegrityError("Migration needed")
+                    
+                    # Test by trying to insert (table might have been created with old constraint)
+                    cursor.execute("""
+                        INSERT INTO change_history (task_id, agent_id, change_type, notes)
+                        VALUES (-1, 'test', 'progress', 'test')
+                    """)
+                    cursor.execute("DELETE FROM change_history WHERE task_id = -1")
+                except sqlite3.IntegrityError:
+                    # Constraint doesn't allow 'progress', need to migrate
+                    logger.info("Migrating change_history table to support update types (progress, note, blocker, question, finding)")
+                    
+                    # Backup existing data
+                    cursor.execute("SELECT * FROM change_history")
+                    old_data = cursor.fetchall()
+                    
+                    # Drop indexes first
+                    cursor.execute("DROP INDEX IF EXISTS idx_change_history_task")
+                    cursor.execute("DROP INDEX IF EXISTS idx_change_history_agent")
+                    cursor.execute("DROP INDEX IF EXISTS idx_change_history_created")
+                    
+                    # Drop old table (this auto-commits in SQLite)
+                    cursor.execute("DROP TABLE change_history")
+                    
+                    # Recreate with updated constraint
+                    query = self._normalize_sql("""
+                        CREATE TABLE change_history (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            task_id INTEGER NOT NULL,
+                            agent_id TEXT NOT NULL,
+                            change_type TEXT NOT NULL
+                                CHECK(change_type IN ('created', 'locked', 'unlocked', 'updated', 'completed', 'verified', 'status_changed', 'relationship_added', 'progress', 'note', 'blocker', 'question', 'finding')),
+                            field_name TEXT,
+                            old_value TEXT,
+                            new_value TEXT,
+                            notes TEXT,
+                            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                        )
+                    """)
+                    self._execute_with_logging(cursor, query)
+                    
+                    # Recreate indexes
+                    self._execute_with_logging(cursor, "CREATE INDEX IF NOT EXISTS idx_change_history_task ON change_history(task_id)")
+                    self._execute_with_logging(cursor, "CREATE INDEX IF NOT EXISTS idx_change_history_agent ON change_history(agent_id)")
+                    self._execute_with_logging(cursor, "CREATE INDEX IF NOT EXISTS idx_change_history_created ON change_history(created_at)")
+                    
+                    # Restore data (skip rows that would violate new constraint - shouldn't be any)
+                    if old_data:
+                        cursor.executemany("""
+                            INSERT INTO change_history (id, task_id, agent_id, change_type, field_name, old_value, new_value, notes, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, old_data)
+                        # Reset sequence to avoid ID conflicts
+                        max_id = max(row[0] for row in old_data if row[0] is not None)
+                        cursor.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'change_history'", (max_id,))
+                    
+                    logger.info(f"Migrated change_history table, restored {len(old_data)} rows")
+                except Exception as e:
+                    if "Migration needed" not in str(e):
+                        logger.error(f"Error during change_history migration: {e}", exc_info=True)
+                        raise
+            
             # Tags table
             query = self._normalize_sql("""
                 CREATE TABLE IF NOT EXISTS tags (
@@ -690,6 +762,24 @@ class TodoDatabase:
                 if not cursor.fetchone():
                     logger.info("Recurring tasks table will be created")
             
+            # Agent experiences table for learning and improvement
+            query = self._normalize_sql("""
+                CREATE TABLE IF NOT EXISTS agent_experiences (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_id TEXT NOT NULL,
+                    task_id INTEGER,
+                    outcome TEXT NOT NULL CHECK(outcome IN ('success', 'failure', 'partial')),
+                    execution_time_hours REAL,
+                    failure_reason TEXT,
+                    strategy_used TEXT,
+                    notes TEXT,
+                    metadata TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+                )
+            """)
+            self._execute_with_logging(cursor, query)
+            
             # Indexes for performance
             indexes = [
                 "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(task_status)",
@@ -738,6 +828,10 @@ class TodoDatabase:
                 "CREATE INDEX IF NOT EXISTS idx_recurring_tasks_task ON recurring_tasks(task_id)",
                 "CREATE INDEX IF NOT EXISTS idx_recurring_tasks_next ON recurring_tasks(next_occurrence)",
                 "CREATE INDEX IF NOT EXISTS idx_recurring_tasks_active ON recurring_tasks(is_active)",
+                "CREATE INDEX IF NOT EXISTS idx_agent_experiences_agent ON agent_experiences(agent_id)",
+                "CREATE INDEX IF NOT EXISTS idx_agent_experiences_task ON agent_experiences(task_id)",
+                "CREATE INDEX IF NOT EXISTS idx_agent_experiences_outcome ON agent_experiences(outcome)",
+                "CREATE INDEX IF NOT EXISTS idx_agent_experiences_created ON agent_experiences(created_at)",
                 # Composite indexes
                 "CREATE INDEX IF NOT EXISTS idx_tasks_status_type ON tasks(task_status, task_type)",
                 "CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, task_status)",
@@ -2654,6 +2748,202 @@ class TodoDatabase:
                 "total_agents": len(agents),
                 "task_type_filter": task_type
             }
+        finally:
+            self.adapter.close(conn)
+    
+    def record_agent_experience(
+        self,
+        agent_id: str,
+        task_id: Optional[int] = None,
+        outcome: str = "success",
+        execution_time_hours: Optional[float] = None,
+        failure_reason: Optional[str] = None,
+        strategy_used: Optional[str] = None,
+        notes: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> int:
+        """
+        Record an agent experience for learning and improvement.
+        
+        Args:
+            agent_id: Agent identifier
+            task_id: Optional task ID this experience relates to
+            outcome: Outcome of the experience ('success', 'failure', 'partial')
+            execution_time_hours: Time taken to complete (if applicable)
+            failure_reason: Reason for failure (if outcome is 'failure')
+            strategy_used: Strategy or approach used
+            notes: Additional notes
+            metadata: Additional structured metadata (JSON)
+            
+        Returns:
+            Experience ID
+        """
+        if outcome not in ["success", "failure", "partial"]:
+            raise ValueError(f"Invalid outcome: {outcome}. Must be one of: success, failure, partial")
+        
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            metadata_json = json.dumps(metadata) if metadata else None
+            
+            experience_id = self._execute_insert(cursor, """
+                INSERT INTO agent_experiences (
+                    agent_id, task_id, outcome, execution_time_hours,
+                    failure_reason, strategy_used, notes, metadata
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (agent_id, task_id, outcome, execution_time_hours,
+                  failure_reason, strategy_used, notes, metadata_json))
+            
+            conn.commit()
+            logger.info(f"Recorded experience {experience_id} for agent {agent_id} (outcome: {outcome})")
+            return experience_id
+        finally:
+            self.adapter.close(conn)
+    
+    def get_agent_experience(self, experience_id: int) -> Optional[Dict[str, Any]]:
+        """Get a specific agent experience by ID."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM agent_experiences WHERE id = ?", (experience_id,))
+            row = cursor.fetchone()
+            if row:
+                experience = dict(row)
+                # Parse metadata JSON if present
+                if experience.get("metadata"):
+                    try:
+                        experience["metadata"] = json.loads(experience["metadata"])
+                    except (json.JSONDecodeError, TypeError):
+                        experience["metadata"] = {}
+                return experience
+            return None
+        finally:
+            self.adapter.close(conn)
+    
+    def query_agent_experiences(
+        self,
+        agent_id: Optional[str] = None,
+        task_id: Optional[int] = None,
+        outcome: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Query agent experiences with filters.
+        
+        Args:
+            agent_id: Filter by agent ID
+            task_id: Filter by task ID
+            outcome: Filter by outcome ('success', 'failure', 'partial')
+            limit: Maximum number of results
+            
+        Returns:
+            List of experience dictionaries
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            conditions = []
+            params = []
+            
+            if agent_id:
+                conditions.append("agent_id = ?")
+                params.append(agent_id)
+            if task_id:
+                conditions.append("task_id = ?")
+                params.append(task_id)
+            if outcome:
+                if outcome not in ["success", "failure", "partial"]:
+                    raise ValueError(f"Invalid outcome: {outcome}")
+                conditions.append("outcome = ?")
+                params.append(outcome)
+            
+            where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+            params.append(limit)
+            
+            cursor.execute(f"""
+                SELECT * FROM agent_experiences
+                {where_clause}
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, params)
+            
+            experiences = []
+            for row in cursor.fetchall():
+                exp = dict(row)
+                # Parse metadata JSON if present
+                if exp.get("metadata"):
+                    try:
+                        exp["metadata"] = json.loads(exp["metadata"])
+                    except (json.JSONDecodeError, TypeError):
+                        exp["metadata"] = {}
+                experiences.append(exp)
+            
+            return experiences
+        finally:
+            self.adapter.close(conn)
+    
+    def get_agent_learning_stats(self, agent_id: str) -> Dict[str, Any]:
+        """
+        Get learning statistics for an agent based on their experiences.
+        
+        Args:
+            agent_id: Agent identifier
+            
+        Returns:
+            Dictionary with learning statistics
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Get total experiences and outcomes
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total_experiences,
+                    COUNT(CASE WHEN outcome = 'success' THEN 1 END) as success_count,
+                    COUNT(CASE WHEN outcome = 'failure' THEN 1 END) as failure_count,
+                    COUNT(CASE WHEN outcome = 'partial' THEN 1 END) as partial_count,
+                    AVG(execution_time_hours) as avg_execution_time,
+                    MIN(execution_time_hours) as min_execution_time,
+                    MAX(execution_time_hours) as max_execution_time
+                FROM agent_experiences
+                WHERE agent_id = ?
+            """, (agent_id,))
+            
+            row = cursor.fetchone()
+            if row and row["total_experiences"] and row["total_experiences"] > 0:
+                total = row["total_experiences"]
+                success_count = row["success_count"] or 0
+                failure_count = row["failure_count"] or 0
+                partial_count = row["partial_count"] or 0
+                
+                return {
+                    "agent_id": agent_id,
+                    "total_experiences": total,
+                    "success_count": success_count,
+                    "failure_count": failure_count,
+                    "partial_count": partial_count,
+                    "success_rate": success_count / total if total > 0 else 0.0,
+                    "failure_rate": failure_count / total if total > 0 else 0.0,
+                    "avg_execution_time": round(float(row["avg_execution_time"]), 2) if row["avg_execution_time"] else None,
+                    "min_execution_time": round(float(row["min_execution_time"]), 2) if row["min_execution_time"] else None,
+                    "max_execution_time": round(float(row["max_execution_time"]), 2) if row["max_execution_time"] else None,
+                }
+            else:
+                # No experiences yet
+                return {
+                    "agent_id": agent_id,
+                    "total_experiences": 0,
+                    "success_count": 0,
+                    "failure_count": 0,
+                    "partial_count": 0,
+                    "success_rate": 0.0,
+                    "failure_rate": 0.0,
+                    "avg_execution_time": None,
+                    "min_execution_time": None,
+                    "max_execution_time": None,
+                }
         finally:
             self.adapter.close(conn)
     

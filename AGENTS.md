@@ -293,57 +293,69 @@ environment:
 
 ## TODO Service Integration (CRITICAL)
 
-**Agents MUST use the TODO service via MCP (Model Context Protocol) functions rather than running direct API calls or code.**
+**Agents MUST use the TODO service via MCP (Model Context Protocol) tools directly. These tools are already available through Cursor's MCP integration. DO NOT create scripts, make HTTP requests, or write wrapper functions.**
 
-The TODO service exposes a comprehensive MCP interface that allows agents to:
-- List and reserve tasks
-- Add progress updates and findings
-- Create and complete tasks
-- Query task context and relationships
-- Track agent performance
+The TODO service exposes MCP tools that are automatically available to you. Use them directly:
+- `mcp_todo_list_available_tasks` - NOT `list_available_tasks()` or HTTP requests
+- `mcp_todo_reserve_task` - NOT `reserve_task()` or HTTP requests
+- `mcp_todo_complete_task` - NOT `complete_task()` or HTTP requests
+- `mcp_todo_add_task_update` - NOT `add_task_update()` or HTTP requests
+- `mcp_todo_get_task_context` - NOT `get_task_context()` or HTTP requests
+- `mcp_todo_unlock_task` - NOT `unlock_task()` or HTTP requests
+- `mcp_todo_query_tasks` - NOT `query_tasks()` or HTTP requests
+- `mcp_todo_create_task` - NOT `create_task()` or HTTP requests
+- `mcp_todo_get_agent_performance` - NOT `get_agent_performance()` or HTTP requests
 
-**Why use MCP instead of direct API calls:**
-1. **Consistency**: All agents interact with tasks in a standardized way
-2. **Context**: MCP functions automatically provide full context (project, ancestry, updates)
-3. **Tracking**: All actions are properly logged with agent identity
-4. **Simplicity**: No need to write HTTP client code or manage API endpoints
-5. **Integration**: Works seamlessly with MCP-compatible agent frameworks
+**CRITICAL: DO NOT:**
+- ❌ Create Python scripts (`work_on_task*.py`, etc.)
+- ❌ Make HTTP requests to `/mcp/*` endpoints using `requests` library
+- ❌ Import `requests` or write wrapper functions around MCP calls
+- ❌ Create helper scripts to "call MCP functions"
+- ❌ Use the service code directly (import `mcp_api`, `database`, etc.)
 
-### Available MCP Functions
+**Why use MCP tools directly:**
+1. **Already Available**: The tools are integrated and ready to use - no setup needed
+2. **Consistency**: All agents interact with tasks in a standardized way
+3. **Context**: MCP tools automatically provide full context (project, ancestry, updates)
+4. **Tracking**: All actions are properly logged with agent identity
+5. **Simplicity**: No need to write HTTP client code or manage API endpoints
+6. **Integration**: Works seamlessly with Cursor's MCP integration
 
-1. **`list_available_tasks`** - Get available tasks for your agent type
+### Available MCP Tools (Use These Directly)
+
+1. **`mcp_todo_list_available_tasks`** - Get available tasks for your agent type
    - Parameters: `agent_type` (breakdown/implementation), `project_id` (optional), `limit`
    - Returns: List of available tasks
 
-2. **`reserve_task`** - Lock and reserve a task (automatically returns full context)
+2. **`mcp_todo_reserve_task`** - Lock and reserve a task (automatically returns full context)
    - Parameters: `task_id`, `agent_id`
    - Returns: Full context including project, ancestry, updates, recent changes
 
-3. **`add_task_update`** - Add progress updates, findings, blockers, or questions
+3. **`mcp_todo_add_task_update`** - Add progress updates, findings, blockers, or questions
    - Parameters: `task_id`, `agent_id`, `content`, `update_type` (progress/note/blocker/question/finding), `metadata` (optional)
    - Returns: Update ID and success status
 
-4. **`get_task_context`** - Get full context for a task (project, ancestry, updates)
+4. **`mcp_todo_get_task_context`** - Get full context for a task (project, ancestry, updates)
    - Parameters: `task_id`
    - Returns: Full task context
 
-5. **`complete_task`** - Mark task complete and optionally create followups
+5. **`mcp_todo_complete_task`** - Mark task complete and optionally create followups
    - Parameters: `task_id`, `agent_id`, `notes` (optional), followup fields (optional)
    - Returns: Completion status and optional followup task ID
 
-6. **`create_task`** - Create new tasks with automatic relationship linking
+6. **`mcp_todo_create_task`** - Create new tasks with automatic relationship linking
    - Parameters: `title`, `task_type`, `task_instruction`, `verification_instruction`, `agent_id`, `project_id` (optional), `parent_task_id` (optional), `relationship_type` (optional), `notes` (optional)
    - Returns: Created task ID and optional relationship ID
 
-7. **`unlock_task`** - Release a reserved task if unable to complete
+7. **`mcp_todo_unlock_task`** - Release a reserved task if unable to complete
    - Parameters: `task_id`, `agent_id`
    - Returns: Unlock status
 
-8. **`query_tasks`** - Query tasks by various criteria
+8. **`mcp_todo_query_tasks`** - Query tasks by various criteria
    - Parameters: `project_id`, `task_type`, `task_status`, `agent_id` (all optional), `limit`
    - Returns: List of matching tasks
 
-9. **`get_agent_performance`** - Get your performance statistics
+9. **`mcp_todo_get_agent_performance`** - Get your performance statistics
    - Parameters: `agent_id`, `task_type` (optional)
    - Returns: Performance statistics
 
@@ -351,40 +363,371 @@ The TODO service exposes a comprehensive MCP interface that allows agents to:
 
 **⚠️ IMPORTANT: Always wrap your workflow in try/except blocks to ensure mandatory completion/unlock. See the "CRITICAL: Task Completion is MANDATORY" section above for full examples.**
 
-1. **Start working on a task:**
+1. **Start working on a task (use MCP tools directly):**
    ```python
    task_id = None
    try:
-       tasks = list_available_tasks(agent_type="implementation", project_id=1)
-       task = reserve_task(task_id=123, agent_id="my-agent-id")
+       # Use mcp_todo_list_available_tasks - it's already available as a tool
+       tasks = mcp_todo_list_available_tasks(agent_type="implementation", project_id=1)
+       # Use mcp_todo_reserve_task - it's already available as a tool
+       task = mcp_todo_reserve_task(task_id=123, agent_id="my-agent-id")
        task_id = 123
    except Exception as e:
        logger.error(f"Failed to reserve task: {e}")
        raise
    ```
 
-2. **While working:**
+2. **While working (use MCP tools directly):**
    ```python
-   add_task_update(task_id=task_id, agent_id="my-agent-id", content="Making progress...", update_type="progress")
-   add_task_update(task_id=task_id, agent_id="my-agent-id", content="Found an issue", update_type="blocker")
+   # Use mcp_todo_add_task_update - it's already available as a tool
+   mcp_todo_add_task_update(task_id=task_id, agent_id="my-agent-id", content="Making progress...", update_type="progress")
+   mcp_todo_add_task_update(task_id=task_id, agent_id="my-agent-id", content="Found an issue", update_type="blocker")
    ```
 
-3. **Get context when needed:**
+3. **Get context when needed (use MCP tools directly):**
    ```python
-   context = get_task_context(task_id=task_id)  # Returns project, ancestry, all updates
+   # Use mcp_todo_get_task_context - it's already available as a tool
+   context = mcp_todo_get_task_context(task_id=task_id)  # Returns project, ancestry, all updates
    ```
 
-4. **🚨 MANDATORY: Complete the task when done:**
+4. **🚨 MANDATORY: Complete the task when done (use MCP tools directly):**
    ```python
-   complete_task(task_id=task_id, agent_id="my-agent-id", notes="Completed successfully")
+   # Use mcp_todo_complete_task - it's already available as a tool
+   mcp_todo_complete_task(task_id=task_id, agent_id="my-agent-id", notes="Completed successfully")
    ```
 
-5. **🚨 MANDATORY: If unable to complete, unlock immediately:**
+5. **🚨 MANDATORY: If unable to complete, unlock immediately (use MCP tools directly):**
    ```python
-   unlock_task(task_id=task_id, agent_id="my-agent-id")
+   # Use mcp_todo_unlock_task - it's already available as a tool
+   mcp_todo_unlock_task(task_id=task_id, agent_id="my-agent-id")
    ```
+
+**REMINDER: These are MCP tools that Cursor exposes automatically. You don't need to import anything or create scripts - just call them directly like any other tool.**
 
 **Remember: Steps 4 or 5 are MANDATORY - one of them MUST be called when you're done working on the task.**
+
+## 🔄 Resuming and Continuing Tasks (CRITICAL)
+
+**Agents MUST check for previous work and continue existing tasks before starting new ones.**
+
+### Priority: Continue Your In-Progress Tasks First
+
+**Before picking up a new task, ALWAYS check if you already have tasks in progress:**
+
+```python
+# 1. First, check for tasks already assigned to you
+my_tasks = query_tasks(
+    agent_id=agent_id,
+    task_status="in_progress",
+    limit=10
+)
+
+if my_tasks:
+    # You have existing work - continue it first!
+    logger.info(f"Found {len(my_tasks)} task(s) already in progress")
+    for task in my_tasks:
+        logger.info(f"  - Task {task['id']}: {task['title']}")
+    
+    # Continue the first in-progress task
+    task_id = my_tasks[0]['id']
+    context = get_task_context(task_id=task_id)
+else:
+    # No existing tasks, can pick up a new one
+    tasks = list_available_tasks(agent_type="implementation", project_id=1)
+    if tasks:
+        task_id = tasks[0]['id']
+        context = reserve_task(task_id=task_id, agent_id=agent_id)
+```
+
+### The Problem
+
+Agents currently pick up new tasks without checking if they already have work in progress, leading to:
+- ❌ Duplicate work (re-doing what another agent already completed)
+- ❌ Ignoring previous progress and updates
+- ❌ Missing uncommitted changes in git
+- ❌ Not resuming where previous agent left off
+- ❌ No documentation of progress
+
+### Mandatory Workflow: Check Previous Work
+
+**When you pick up a task (new or existing), you MUST:**
+
+1. **Check for Previous Context:**
+   ```python
+   # Immediately after reserving, get full context
+   context = get_task_context(task_id=task_id)
+   
+   # Check for:
+   # - Previous updates (context["updates"])
+   # - Recent changes (context["recent_changes"])
+   # - Stale warnings (context.get("stale_warning"))
+   # - Parent tasks and relationships (context["ancestry"])
+   # - Project information (context["project"])
+   ```
+
+2. **Check Git Status for Uncommitted Work:**
+   ```python
+   # ALWAYS check git status before starting
+   import subprocess
+   
+   # Check for uncommitted changes in the project directory
+   project_path = context["project"]["local_path"]
+   git_status = subprocess.run(
+       ["git", "status", "--short"],
+       cwd=project_path,
+       capture_output=True,
+       text=True
+   ).stdout
+   
+   if git_status.strip():
+       # There are uncommitted changes - review them first!
+       # They might be work from a previous agent session
+       logger.info(f"Found uncommitted changes:\n{git_status}")
+       
+       # Show the diff to understand what was done
+       git_diff = subprocess.run(
+           ["git", "diff"],
+           cwd=project_path,
+           capture_output=True,
+           text=True
+       ).stdout
+       
+       # Review the changes and determine if work should continue
+   ```
+
+3. **Review Previous Updates:**
+   ```python
+   # Check what the previous agent(s) documented
+   updates = context.get("updates", [])
+   
+   for update in updates:
+       logger.info(f"Previous update [{update['update_type']}]: {update['content']}")
+       # Understand what was tried, what worked, what failed
+       
+   # If there are blockers, address them
+   blockers = [u for u in updates if u["update_type"] == "blocker"]
+   if blockers:
+       logger.warning(f"Found {len(blockers)} blocker(s) from previous work")
+       # Address blockers before continuing
+   ```
+
+4. **Check for Stale Task Warnings:**
+   ```python
+   # If task was previously abandoned, you MUST verify work
+   stale_warning = context.get("stale_warning")
+   if stale_warning:
+       logger.warning(f"⚠️ STALE TASK WARNING: {stale_warning['message']}")
+       logger.warning(f"Previous agent: {stale_warning['previous_agent']}")
+       logger.warning(f"Previously unlocked at: {stale_warning['unlocked_at']}")
+       
+       # MANDATORY: Verify all previous work before continuing
+       # - Check if any code changes are correct
+       # - Verify if tests pass
+       # - Confirm no regressions
+       # - Document your verification in an update
+       
+       add_task_update(
+           task_id=task_id,
+           agent_id=agent_id,
+           content=f"Verifying previous work by {stale_warning['previous_agent']}. Checking git status, reviewing changes, running tests.",
+           update_type="progress"
+       )
+   ```
+
+5. **Resume Where Previous Work Left Off:**
+   ```python
+   # Based on updates and git status, determine:
+   # - What was already implemented
+   # - What still needs to be done
+   # - What tests already pass
+   # - What needs to be fixed or completed
+   
+   # Create a plan that builds on previous work
+   # Don't start from scratch - continue the work
+   
+   add_task_update(
+       task_id=task_id,
+       agent_id=agent_id,
+       content="Resuming work. Reviewed previous updates and git status. Previous agent made progress on X, Y. Will continue with Z.",
+       update_type="progress"
+   )
+   ```
+
+6. **Document Your Progress Continuously:**
+   ```python
+   # As you work, add updates frequently:
+   add_task_update(
+       task_id=task_id,
+       agent_id=agent_id,
+       content="Completed step 1: Implemented X function with tests",
+       update_type="progress"
+   )
+   
+   add_task_update(
+       task_id=task_id,
+       agent_id=agent_id,
+       content="Found issue with Y - needs refactoring. Creating followup task.",
+       update_type="finding"
+   )
+   
+   # This helps the next agent understand what happened
+   ```
+
+### Complete Workflow Example: Continuing Existing or Starting New
+
+```python
+task_id = None
+agent_id = "my-agent-id"
+
+try:
+    # 1. FIRST: Check for tasks already assigned to you
+    my_tasks = query_tasks(
+        agent_id=agent_id,
+        task_status="in_progress",
+        limit=10
+    )
+    
+    if my_tasks:
+        # Continue existing work first
+        logger.info(f"Found {len(my_tasks)} task(s) already in progress - continuing work")
+        task_id = my_tasks[0]['id']
+        context = get_task_context(task_id=task_id)
+        logger.info(f"Continuing task {task_id}: {context['task']['title']}")
+    else:
+        # No existing work, pick up a new task
+        logger.info("No tasks in progress, picking up new task")
+        tasks = list_available_tasks(agent_type="implementation", project_id=1, limit=1)
+        if not tasks:
+            logger.info("No available tasks")
+            return
+        
+        task_id = tasks[0]['id']
+        result = reserve_task(task_id=task_id, agent_id=agent_id)
+        context = result  # reserve_task returns full context
+    
+    # 2. CHECK FOR STALE WARNING (MANDATORY)
+    stale_warning = context.get("stale_warning")
+    if stale_warning:
+        logger.warning(f"⚠️ Picking up stale task: {stale_warning['message']}")
+        add_task_update(
+            task_id=task_id,
+            agent_id=agent_id,
+            content=f"Resuming stale task. Verifying previous work by {stale_warning['previous_agent']}.",
+            update_type="progress"
+        )
+    
+    # 3. REVIEW PREVIOUS UPDATES (MANDATORY)
+    updates = context.get("updates", [])
+    logger.info(f"Found {len(updates)} previous update(s)")
+    for update in updates:
+        logger.info(f"  - [{update['update_type']}] {update['content']}")
+    
+    # 4. CHECK GIT STATUS (MANDATORY)
+    project_path = context["project"]["local_path"]
+    git_status = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=project_path,
+        capture_output=True,
+        text=True
+    ).stdout
+    
+    if git_status.strip():
+        logger.info(f"Found uncommitted changes:\n{git_status}")
+        
+        # Review the diff
+        git_diff = subprocess.run(
+            ["git", "diff"],
+            cwd=project_path,
+            capture_output=True,
+            text=True
+        ).stdout
+        
+        logger.info(f"Reviewing changes:\n{git_diff[:500]}...")  # First 500 chars
+        
+        # Document that you're reviewing previous work
+        add_task_update(
+            task_id=task_id,
+            agent_id=agent_id,
+            content="Found uncommitted changes from previous work. Reviewing diff to understand progress.",
+            update_type="progress"
+        )
+    
+    # 5. CHECK RECENT CHANGES (MANDATORY)
+    recent_changes = context.get("recent_changes", [])
+    logger.info(f"Recent changes: {len(recent_changes)}")
+    for change in recent_changes[-5:]:  # Last 5 changes
+        logger.info(f"  - {change['change_type']}: {change.get('field_name', 'N/A')}")
+    
+    # 6. DETERMINE WHERE TO RESUME (MANDATORY)
+    # Based on updates, git status, and recent changes:
+    # - What was already done?
+    # - What still needs to be done?
+    # - What should be tested?
+    
+    add_task_update(
+        task_id=task_id,
+        agent_id=agent_id,
+        content="Completed context review. Resuming work based on previous progress. Plan: [your plan here]",
+        update_type="progress"
+    )
+    
+    # 7. DO THE WORK (resuming from where previous agent left off)
+    # ... your implementation ...
+    
+    # 8. DOCUMENT PROGRESS AS YOU WORK
+    add_task_update(
+        task_id=task_id,
+        agent_id=agent_id,
+        content="Completed implementation of X. Running tests...",
+        update_type="progress"
+    )
+    
+    # 9. COMPLETE THE TASK
+    complete_task(
+        task_id=task_id,
+        agent_id=agent_id,
+        notes="Completed successfully. Built on previous work: [summary of what was done]"
+    )
+    
+except Exception as e:
+    logger.error(f"Failed to complete task {task_id}: {e}", exc_info=True)
+    
+    # Always unlock on error
+    if task_id:
+        try:
+            unlock_task(task_id=task_id, agent_id=agent_id)
+            add_task_update(
+                task_id=task_id,
+                agent_id=agent_id,
+                content=f"Unlocking task due to error: {str(e)}",
+                update_type="blocker"
+            )
+        except Exception as unlock_error:
+            logger.error(f"Failed to unlock task {task_id}: {unlock_error}", exc_info=True)
+    
+    raise
+```
+
+### Benefits of Continuing Existing Tasks
+
+- ✅ **No duplicate work** - Agents build on previous progress
+- ✅ **Better continuity** - Work continues seamlessly across agent sessions
+- ✅ **Documented progress** - Updates show what was done and why
+- ✅ **Faster completion** - Don't re-do what's already done
+- ✅ **Better debugging** - Clear history of attempts and issues
+- ✅ **Resource efficiency** - Don't waste time on completed work
+
+### Common Mistakes to Avoid
+
+- ❌ Starting work without checking `get_task_context()`
+- ❌ Ignoring `stale_warning` - you MUST verify previous work
+- ❌ Not checking git status - uncommitted changes might be previous work
+- ❌ Not reading previous updates - you might repeat failed attempts
+- ❌ Starting from scratch when work was already done
+- ❌ Not documenting progress - next agent won't know what happened
+- ❌ Not checking for blockers - you might hit the same issues
+
+**This is CRITICAL for maintaining work continuity and preventing duplicate effort.**
 
 ## ⚠️ CRITICAL: Task Completion is MANDATORY ⚠️
 

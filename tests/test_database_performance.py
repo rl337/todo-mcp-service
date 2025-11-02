@@ -9,7 +9,7 @@ import shutil
 import time
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from database import TodoDatabase
 

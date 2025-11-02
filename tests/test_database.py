@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from database import TodoDatabase
 
@@ -3321,3 +3321,161 @@ def test_unlock_stale_tasks(temp_db):
     task = db.get_task(task_id)
     assert task["task_status"] == "available"
     assert task["assigned_agent"] is None
+
+
+def test_record_agent_experience(temp_db):
+    """Test recording agent experience for a completed task."""
+    db, _ = temp_db
+    
+    # Create and complete a task
+    task_id = db.create_task(
+        title="Test Task",
+        task_type="concrete",
+        task_instruction="Do something",
+        verification_instruction="Check it works",
+        agent_id="test-agent"
+    )
+    db.lock_task(task_id, "test-agent")
+    db.complete_task(task_id, "test-agent", actual_hours=2.5)
+    
+    # Record experience
+    experience_id = db.record_agent_experience(
+        agent_id="test-agent",
+        task_id=task_id,
+        outcome="success",
+        execution_time_hours=2.5,
+        notes="Completed successfully"
+    )
+    
+    assert experience_id > 0
+    
+    # Verify experience was recorded
+    experience = db.get_agent_experience(experience_id)
+    assert experience is not None
+    assert experience["agent_id"] == "test-agent"
+    assert experience["task_id"] == task_id
+    assert experience["outcome"] == "success"
+    assert experience["execution_time_hours"] == 2.5
+
+
+def test_record_agent_experience_with_failure(temp_db):
+    """Test recording agent experience for a failed task."""
+    db, _ = temp_db
+    
+    task_id = db.create_task(
+        title="Failed Task",
+        task_type="concrete",
+        task_instruction="Do something",
+        verification_instruction="Check it works",
+        agent_id="test-agent"
+    )
+    db.lock_task(task_id, "test-agent")
+    
+    # Record failure experience
+    experience_id = db.record_agent_experience(
+        agent_id="test-agent",
+        task_id=task_id,
+        outcome="failure",
+        execution_time_hours=1.0,
+        failure_reason="Test failure",
+        notes="Task failed due to error"
+    )
+    
+    assert experience_id > 0
+    
+    experience = db.get_agent_experience(experience_id)
+    assert experience["outcome"] == "failure"
+    assert experience["failure_reason"] == "Test failure"
+
+
+def test_query_agent_experiences(temp_db):
+    """Test querying agent experiences."""
+    db, _ = temp_db
+    
+    # Create multiple tasks and record experiences
+    task1 = db.create_task(
+        title="Task 1",
+        task_type="concrete",
+        task_instruction="Do 1",
+        verification_instruction="Verify 1",
+        agent_id="agent-1"
+    )
+    db.lock_task(task1, "agent-1")
+    db.complete_task(task1, "agent-1", actual_hours=1.0)
+    db.record_agent_experience(agent_id="agent-1", task_id=task1, outcome="success", execution_time_hours=1.0)
+    
+    task2 = db.create_task(
+        title="Task 2",
+        task_type="concrete",
+        task_instruction="Do 2",
+        verification_instruction="Verify 2",
+        agent_id="agent-1"
+    )
+    db.lock_task(task2, "agent-1")
+    db.complete_task(task2, "agent-1", actual_hours=2.0)
+    db.record_agent_experience(agent_id="agent-1", task_id=task2, outcome="success", execution_time_hours=2.0)
+    
+    task3 = db.create_task(
+        title="Task 3",
+        task_type="concrete",
+        task_instruction="Do 3",
+        verification_instruction="Verify 3",
+        agent_id="agent-1"
+    )
+    db.lock_task(task3, "agent-1")
+    db.record_agent_experience(agent_id="agent-1", task_id=task3, outcome="failure", execution_time_hours=0.5, failure_reason="Error")
+    
+    # Query experiences for agent-1
+    experiences = db.query_agent_experiences(agent_id="agent-1", limit=10)
+    assert len(experiences) == 3
+    
+    # Query only successful experiences
+    success_experiences = db.query_agent_experiences(agent_id="agent-1", outcome="success", limit=10)
+    assert len(success_experiences) == 2
+    assert all(e["outcome"] == "success" for e in success_experiences)
+
+
+def test_get_agent_learning_stats(temp_db):
+    """Test getting learning statistics for an agent."""
+    db, _ = temp_db
+    
+    # Record multiple experiences
+    task1 = db.create_task(
+        title="Task 1",
+        task_type="concrete",
+        task_instruction="Do 1",
+        verification_instruction="Verify 1",
+        agent_id="agent-1"
+    )
+    db.lock_task(task1, "agent-1")
+    db.complete_task(task1, "agent-1", actual_hours=1.0)
+    db.record_agent_experience(agent_id="agent-1", task_id=task1, outcome="success", execution_time_hours=1.0)
+    
+    task2 = db.create_task(
+        title="Task 2",
+        task_type="concrete",
+        task_instruction="Do 2",
+        verification_instruction="Verify 2",
+        agent_id="agent-1"
+    )
+    db.lock_task(task2, "agent-1")
+    db.complete_task(task2, "agent-1", actual_hours=2.0)
+    db.record_agent_experience(agent_id="agent-1", task_id=task2, outcome="success", execution_time_hours=2.0)
+    
+    task3 = db.create_task(
+        title="Task 3",
+        task_type="concrete",
+        task_instruction="Do 3",
+        verification_instruction="Verify 3",
+        agent_id="agent-1"
+    )
+    db.lock_task(task3, "agent-1")
+    db.record_agent_experience(agent_id="agent-1", task_id=task3, outcome="failure", execution_time_hours=0.5, failure_reason="Error")
+    
+    # Get learning stats
+    stats = db.get_agent_learning_stats("agent-1")
+    assert stats["total_experiences"] == 3
+    assert stats["success_count"] == 2
+    assert stats["failure_count"] == 1
+    assert stats["success_rate"] == 2.0 / 3.0
+    assert stats["avg_execution_time"] == (1.0 + 2.0 + 0.5) / 3.0

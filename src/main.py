@@ -31,6 +31,7 @@ from backup import BackupManager, BackupScheduler
 from webhooks import notify_webhooks
 from monitoring import MetricsMiddleware, get_metrics, get_health_info, get_request_id
 from rate_limiting import RateLimitMiddleware
+from security_headers import SecurityHeadersMiddleware
 from tracing import (
     setup_tracing, instrument_fastapi, instrument_database, instrument_httpx
 )
@@ -293,6 +294,9 @@ app.add_middleware(MetricsMiddleware)
 
 # Add rate limiting middleware (after metrics, before routes)
 app.add_middleware(RateLimitMiddleware)
+
+# Add security headers middleware (adds security headers to all responses)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Add GraphQL router
 graphql_app = GraphQLRouter(schema)
@@ -561,16 +565,37 @@ async def sqlite_exception_handler(request: Request, exc: sqlite3.Error):
             "exception_type": type(exc).__name__,
         }
     )
-    response = JSONResponse(
-        status_code=500,
-        content={
-            "error": "Database error",
-            "detail": "A database operation failed. Please try again or contact support if the issue persists.",
-            "path": request.url.path,
-            "method": request.method,
-            "request_id": request_id
-        }
-    )
+    
+    # For MCP endpoints, return error in MCP format so agents can see it
+    if request.url.path.startswith("/mcp/"):
+        error_detail = str(exc)
+        if isinstance(exc, sqlite3.IntegrityError) and "CHECK constraint" in error_detail:
+            error_detail += ". This may indicate a schema mismatch - please check database migration status."
+        
+        response = JSONResponse(
+            status_code=200,  # MCP endpoints return 200 even on error
+            content={
+                "success": False,
+                "error": f"Database error in {request.url.path}: {error_detail}",
+                "error_type": type(exc).__name__,
+                "error_details": error_detail,
+                "path": request.url.path,
+                "request_id": request_id
+            }
+        )
+    else:
+        # For non-MCP endpoints, use standard error format
+        response = JSONResponse(
+            status_code=500,
+            content={
+                "error": "Database error",
+                "detail": "A database operation failed. Please try again or contact support if the issue persists.",
+                "path": request.url.path,
+                "method": request.method,
+                "request_id": request_id
+            }
+        )
+    
     # Add request ID to headers if available
     if request_id != '-':
         response.headers["X-Request-ID"] = request_id

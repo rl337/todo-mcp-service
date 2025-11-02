@@ -498,6 +498,35 @@ class MCPTodoAPI:
                 "success": False,
                 "error": f"Cannot add update to task {task_id}: {str(e)}"
             }
+        except Exception as e:
+            # Catch database errors (IntegrityError, OperationalError, etc.) and return meaningful error
+            import sqlite3
+            error_type = type(e).__name__
+            error_message = str(e)
+            
+            # Provide more specific error messages for common database errors
+            if isinstance(e, sqlite3.IntegrityError):
+                if "CHECK constraint" in error_message:
+                    return {
+                        "success": False,
+                        "error": f"Database constraint error when adding update to task {task_id}: {error_message}. This may indicate a schema mismatch - please check database migration status.",
+                        "error_type": "database_constraint_error",
+                        "error_details": error_message
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Database integrity error when adding update to task {task_id}: {error_message}",
+                        "error_type": "database_integrity_error",
+                        "error_details": error_message
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Failed to add update to task {task_id}: {error_type}: {error_message}",
+                    "error_type": error_type,
+                    "error_details": error_message
+                }
     
     @staticmethod
     def get_task_context(task_id: int) -> Dict[str, Any]:

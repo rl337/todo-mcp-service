@@ -99,10 +99,15 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
     "-v",
-    "--tb=short",
-    "--cov=src",
-    "--cov-report=xml",
-    "--cov-report=html",
-    "--cov-report=term",
+    "--tb=short"
 ]
-coverage_threshold = 80
+# Coverage options (optional - uncomment if pytest-cov is installed)
+# addopts = [
+#     "-v",
+#     "--tb=short",
+#     "--cov=src",
+#     "--cov-report=xml",
+#     "--cov-report=html",
+#     "--cov-report=term"
+# ]
+# coverage_threshold = 80

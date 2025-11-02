@@ -57,24 +57,46 @@ check_dependencies() {
     fi
     print_success "Python3 found: $(python3 --version)"
     
-    # Check for pytest
-    if ! python3 -c "import pytest" 2>/dev/null; then
-        print_warning "pytest not installed. Installing..."
-        # Use UV if available, otherwise pip
-        if command -v uv &> /dev/null; then
-            uv pip install pytest pytest-asyncio httpx fastapi
-        else
-            pip install pytest pytest-asyncio httpx fastapi || pip3 install pytest pytest-asyncio httpx fastapi
+    # Check for pytest (via UV or Poetry)
+    if command -v uv &> /dev/null; then
+        print_success "UV found: $(uv --version)"
+        if ! uv run python3 -c "import pytest" 2>/dev/null; then
+            print_warning "pytest not available in UV environment. Installing dev dependencies..."
+            uv sync --dev
         fi
-    fi
-    print_success "pytest available"
-    
-    # Check for other dependencies
-    if ! python3 -c "import fastapi" 2>/dev/null; then
-        print_error "fastapi not installed"
+        print_success "pytest available via UV"
+    elif command -v poetry &> /dev/null; then
+        print_success "Poetry found: $(poetry --version)"
+        if ! poetry run python3 -c "import pytest" 2>/dev/null; then
+            print_warning "pytest not available in Poetry environment. Installing dev dependencies..."
+            poetry install --with dev
+        fi
+        print_success "pytest available via Poetry"
+    else
+        print_error "Neither UV nor Poetry found. Install UV: curl -LsSf https://astral.sh/uv/install.sh | sh"
         exit 1
     fi
-    print_success "FastAPI available"
+    
+    # Check for other dependencies (via UV or Poetry if using them)
+    if command -v uv &> /dev/null; then
+        if ! uv run python3 -c "import fastapi" 2>/dev/null; then
+            print_warning "FastAPI not available in UV environment. Running uv sync..."
+            uv sync
+        fi
+        print_success "FastAPI available via UV"
+    elif command -v poetry &> /dev/null; then
+        if ! poetry run python3 -c "import fastapi" 2>/dev/null; then
+            print_warning "FastAPI not available in Poetry environment. Running poetry install..."
+            poetry install
+        fi
+        print_success "FastAPI available via Poetry"
+    else
+        if ! python3 -c "import fastapi" 2>/dev/null; then
+            print_error "fastapi not installed"
+            exit 1
+        fi
+        print_success "FastAPI available"
+    fi
 }
 
 # Run unit tests
@@ -101,7 +123,18 @@ run_tests() {
         fi
         
         print_info "Running $(basename $test_file)..."
-        if poetry run pytest "$test_file" -v --tb=short; then
+        # Use UV if available, otherwise Poetry, otherwise venv pytest
+        if command -v uv &> /dev/null && [ -f ".venv/bin/pytest" ]; then
+            pytest_cmd=".venv/bin/pytest"
+        elif command -v uv &> /dev/null; then
+            pytest_cmd="uv run pytest"
+        elif command -v poetry &> /dev/null; then
+            pytest_cmd="poetry run pytest"
+        else
+            pytest_cmd="python3 -m pytest"
+        fi
+        
+        if $pytest_cmd "$test_file" -v --tb=short; then
             print_success "$(basename $test_file) passed"
         else
             print_error "$(basename $test_file) failed"
@@ -240,7 +273,18 @@ EOF
 test_backup_functionality() {
     print_header "Testing Backup Functionality"
     
-    if poetry run pytest tests/test_backup.py -v --tb=short -k "test_" 2>/dev/null | grep -q "PASSED\|passed"; then
+    # Use UV venv if available, otherwise Poetry, otherwise system pytest
+    if command -v uv &> /dev/null && [ -f ".venv/bin/pytest" ]; then
+        pytest_cmd=".venv/bin/pytest"
+    elif command -v uv &> /dev/null; then
+        pytest_cmd="uv run pytest"
+    elif command -v poetry &> /dev/null; then
+        pytest_cmd="poetry run pytest"
+    else
+        pytest_cmd="python3 -m pytest"
+    fi
+    
+    if $pytest_cmd tests/test_backup.py -v --tb=short -k "test_" 2>/dev/null | grep -q "PASSED\|passed"; then
         print_success "Backup functionality tests passed"
         return 0
     else
