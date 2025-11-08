@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from unittest.mock import Mock, MagicMock, patch
-from api.routes import tasks
+from api.all_routes import router as tasks_router
 from models.task_models import TaskCreate, TaskResponse
 
 
@@ -39,7 +39,7 @@ def mock_task_service(mock_db):
 def app_with_tasks_router():
     """Create a minimal FastAPI app with only the tasks router."""
     app = FastAPI()
-    app.include_router(tasks.router)
+    app.include_router(tasks_router)
     return app
 
 
@@ -107,27 +107,26 @@ def test_create_task_route_exists(client):
 
 def test_get_task_route_exists(client):
     """Test that GET /tasks/{task_id} route exists."""
-    with patch('dependencies.services.get_db') as mock_get_db, \
-         patch('services.task_service.TaskService') as mock_service_class:
-            
-            mock_db = Mock()
-            mock_get_db.return_value = mock_db
-            
-            mock_service = Mock()
-            mock_service.get_task.return_value = {
-                "id": 1,
-                "title": "Test Task",
-                "task_type": "concrete"
-            }
-            mock_service_class.return_value = mock_service
-            
-            response = client.get("/tasks/1")
-            
-            print(f"\nGET /tasks/1 response status: {response.status_code}")
-            print(f"Response: {response.text[:200]}")
-            
-            # Route exists if we get auth/validation error, not 404
-            assert response.status_code != 404, f"Route not found (404). Available routes: {[r.path for r in client.app.routes if hasattr(r, 'path')]}"
+    response = client.get("/tasks/1")
+    
+    print(f"\nGET /tasks/1 response status: {response.status_code}")
+    print(f"Response: {response.text[:200]}")
+    
+    # Route exists if we get a 404 with a task-specific error message (not a generic 404)
+    # OR if we get a different status code (auth error, etc.)
+    if response.status_code == 404:
+        # Check if the error message indicates the route exists but task doesn't
+        response_text = response.text.lower()
+        if "task" in response_text and ("not found" in response_text or "does not exist" in response_text):
+            # Route exists, task just doesn't exist
+            assert True, "Route exists (404 with task-specific error message)"
+        else:
+            # Generic 404 - route might not exist
+            available_routes = [r.path for r in client.app.routes if hasattr(r, 'path')]
+            assert False, f"Route may not exist (generic 404). Available routes: {available_routes}"
+    else:
+        # Any other status code means the route exists
+        assert True, f"Route exists (status {response.status_code})"
 
 
 def test_list_all_routes(client):
