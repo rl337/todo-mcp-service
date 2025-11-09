@@ -13,8 +13,8 @@ from datetime import datetime
 from enum import Enum
 import logging
 
-from db_adapter import get_database_adapter, BaseDatabaseAdapter, DatabaseType
-from tracing import trace_span, add_span_attribute
+from todorama.db_adapter import get_database_adapter, BaseDatabaseAdapter, DatabaseType
+from todorama.tracing import trace_span, add_span_attribute
 try:
     from opentelemetry import trace
 except ImportError:
@@ -2391,8 +2391,8 @@ class TodoDatabase:
                 except (ValueError, AttributeError) as e:
                     # If parsing fails, use as-is (might work if already in correct format)
                     logger.warning(f"Failed to parse start_date '{start_date}': {e}, using as-is")
-                conditions.append("ch.created_at >= ?")
-                params.append(start_date)
+                    conditions.append("ch.created_at >= ?")
+                    params.append(start_date)
             if end_date:
                 # Normalize date format for SQLite comparison
                 try:
@@ -2433,8 +2433,8 @@ class TodoDatabase:
                 except (ValueError, AttributeError) as e:
                     # If parsing fails, use as-is
                     logger.warning(f"Failed to parse end_date '{end_date}': {e}, using as-is")
-                conditions.append("ch.created_at <= ?")
-                params.append(end_date)
+                    conditions.append("ch.created_at <= ?")
+                    params.append(end_date)
             
             where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
             
