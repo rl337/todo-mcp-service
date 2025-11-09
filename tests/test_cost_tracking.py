@@ -6,7 +6,7 @@ import os
 import tempfile
 from datetime import datetime, timedelta
 from src.cost_tracking import CostTracker, ServiceType
-from src.conversation_storage import ConversationStorage
+from todorama.conversation_storage import ConversationStorage
 
 
 @pytest.fixture

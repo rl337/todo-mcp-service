@@ -8,7 +8,7 @@ import tempfile
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from src.conversation_storage import ConversationStorage
+from todorama.conversation_storage import ConversationStorage
 
 
 @pytest.fixture

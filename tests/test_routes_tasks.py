@@ -7,13 +7,13 @@ import os
 import sys
 
 # Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from unittest.mock import Mock, MagicMock, patch
-from api.all_routes import router as tasks_router
-from models.task_models import TaskCreate, TaskResponse
+from todorama.api.all_routes import router as tasks_router
+from todorama.models.task_models import TaskCreate, TaskResponse
 
 
 @pytest.fixture
@@ -67,8 +67,8 @@ def test_tasks_router_registered(app_with_tasks_router):
 def test_create_task_route_exists(client):
     """Test that POST /tasks route exists."""
     # Try to get route info
-    with patch('dependencies.services.get_db') as mock_get_db, \
-         patch('services.task_service.TaskService') as mock_service_class:
+    with patch('todorama.dependencies.services.get_db') as mock_get_db, \
+         patch('todorama.services.task_service.TaskService') as mock_service_class:
             
             mock_db = Mock()
             mock_get_db.return_value = mock_db

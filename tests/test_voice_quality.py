@@ -8,7 +8,7 @@ import wave
 import struct
 import numpy as np
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
 from voice_quality import VoiceQualityScorer, VoiceQualityError
 

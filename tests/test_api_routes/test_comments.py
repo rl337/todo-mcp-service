@@ -13,8 +13,8 @@ from unittest.mock import Mock, MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api.routes import comments
-from models.comment_models import CommentCreate, CommentResponse
+from todorama.api.routes import comments
+from todorama.models.comment_models import CommentCreate, CommentResponse
 
 
 @pytest.fixture
@@ -94,8 +94,8 @@ def client(app):
 class TestCreateComment:
     """Test POST /tasks/{task_id}/comments endpoint."""
     
-    @patch('api.routes.comments.get_db')
-    @patch('api.routes.comments.verify_user_auth')
+    @patch('todorama.api.routes.comments.get_db')
+    @patch('todorama.api.routes.comments.verify_user_auth')
     def test_create_comment_success(
         self, mock_verify_auth, mock_get_db, client, mock_db, mock_auth
     ):
@@ -122,8 +122,8 @@ class TestCreateComment:
         mock_db.create_comment.assert_called_once()
         mock_db.get_comment.assert_called_once_with(1)
     
-    @patch('api.routes.comments.get_db')
-    @patch('api.routes.comments.verify_user_auth')
+    @patch('todorama.api.routes.comments.get_db')
+    @patch('todorama.api.routes.comments.verify_user_auth')
     def test_create_comment_task_not_found(
         self, mock_verify_auth, mock_get_db, client, mock_db, mock_auth
     ):
@@ -146,8 +146,8 @@ class TestCreateComment:
         assert "not found" in response.json()["detail"].lower()
         assert "999" in response.json()["detail"]
     
-    @patch('api.routes.comments.get_db')
-    @patch('api.routes.comments.verify_user_auth')
+    @patch('todorama.api.routes.comments.get_db')
+    @patch('todorama.api.routes.comments.verify_user_auth')
     def test_create_comment_validation_error(
         self, mock_verify_auth, mock_get_db, client, mock_db, mock_auth
     ):
@@ -160,8 +160,8 @@ class TestCreateComment:
         
         assert response.status_code == 422  # Validation error
     
-    @patch('api.routes.comments.get_db')
-    @patch('api.routes.comments.verify_user_auth')
+    @patch('todorama.api.routes.comments.get_db')
+    @patch('todorama.api.routes.comments.verify_user_auth')
     def test_create_comment_authentication_required(
         self, mock_verify_auth, mock_get_db, client, mock_db
     ):
@@ -186,7 +186,7 @@ class TestCreateComment:
 class TestGetTaskComments:
     """Test GET /tasks/{task_id}/comments endpoint."""
     
-    @patch('api.routes.comments.get_db')
+    @patch('todorama.api.routes.comments.get_db')
     def test_get_task_comments_success(self, mock_get_db, client, mock_db):
         """Test successful task comments retrieval."""
         mock_get_db.return_value = mock_db
@@ -201,7 +201,7 @@ class TestGetTaskComments:
         assert data[1]["id"] == 2
         mock_db.list_task_comments.assert_called_once_with(1)
     
-    @patch('api.routes.comments.get_db')
+    @patch('todorama.api.routes.comments.get_db')
     def test_get_task_comments_empty(self, mock_get_db, client, mock_db):
         """Test task comments retrieval when no comments exist."""
         mock_get_db.return_value = mock_db
@@ -218,7 +218,7 @@ class TestGetTaskComments:
 class TestGetCommentThread:
     """Test GET /comments/{comment_id}/thread endpoint."""
     
-    @patch('api.routes.comments.get_db')
+    @patch('todorama.api.routes.comments.get_db')
     def test_get_comment_thread_success(self, mock_get_db, client, mock_db):
         """Test successful comment thread retrieval."""
         mock_get_db.return_value = mock_db
@@ -235,7 +235,7 @@ class TestGetCommentThread:
         assert data[1]["parent_comment_id"] == 1
         mock_db.get_comment_thread.assert_called_once_with(1)
     
-    @patch('api.routes.comments.get_db')
+    @patch('todorama.api.routes.comments.get_db')
     def test_get_comment_thread_not_found(self, mock_get_db, client, mock_db):
         """Test comment thread retrieval when comment not found."""
         mock_get_db.return_value = mock_db

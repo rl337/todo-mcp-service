@@ -10,8 +10,8 @@ from unittest.mock import Mock, MagicMock, patch, call
 import boto3
 from moto import mock_s3
 
-from src.conversation_storage import ConversationStorage
-from src.conversation_backup import ConversationBackupManager, BackupScheduler
+from todorama.conversation_storage import ConversationStorage
+from todorama.conversation_backup import ConversationBackupManager, BackupScheduler
 
 
 @pytest.fixture

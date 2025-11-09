@@ -8,11 +8,11 @@ import shutil
 from fastapi.testclient import TestClient
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from src.main import app
-from src.database import TodoDatabase
-from src.backup import BackupManager
+from todorama.main import app
+from todorama.database import TodoDatabase
+from todorama.backup import BackupManager
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def temp_db():
     # Use SQLite for testing (conversation_storage will use db_adapter)
     conv_db_path = os.path.join(temp_dir, "test_conv.db")
     os.environ['DB_TYPE'] = 'sqlite'
-    from src.conversation_storage import ConversationStorage
+    from todorama.conversation_storage import ConversationStorage
     conversation_storage = ConversationStorage(conv_db_path)
     
     # Override the database, backup manager, and conversation storage in the app

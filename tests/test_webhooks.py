@@ -9,11 +9,12 @@ from unittest.mock import Mock, patch, MagicMock
 from fastapi.testclient import TestClient
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from main import app
-from database import TodoDatabase
-from backup import BackupManager
+from todorama.app import create_app
+app = create_app()
+from todorama.database import TodoDatabase
+from todorama.backup import BackupManager
 
 
 @pytest.fixture
@@ -28,11 +29,25 @@ def temp_db():
     backup_manager = BackupManager(db_path, backups_dir)
     
     # Override the database and backup manager in the app
-    import main
-    main.db = db
-    main.backup_manager = backup_manager
+    from todorama.dependencies.services import get_services
+    import todorama.dependencies.services as services_module
+    
+    class MockServiceContainer:
+        def __init__(self, db, backup_manager, conversation_storage=None):
+            self.db = db
+            self.backup_manager = backup_manager
+            self.conversation_storage = conversation_storage
+            self.backup_scheduler = None
+            self.conversation_backup_manager = None
+            self.conversation_backup_scheduler = None
+            self.job_queue = None
+    
+    original_instance = services_module._service_instance
+    services_module._service_instance = MockServiceContainer(db, backup_manager, conversation_storage if 'conversation_storage' in locals() else None)
     
     yield db, db_path, backups_dir
+    # Restore original service instance
+    services_module._service_instance = original_instance
     
     shutil.rmtree(temp_dir)
 

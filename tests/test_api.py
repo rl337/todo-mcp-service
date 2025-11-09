@@ -20,12 +20,13 @@ os.environ.setdefault('RATE_LIMIT_USER_MAX', '10000')
 os.environ.setdefault('RATE_LIMIT_USER_WINDOW', '60')
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
 from fastapi.testclient import TestClient
-from main import app
-from database import TodoDatabase
-from backup import BackupManager
+from todorama.app import create_app
+app = create_app()
+from todorama.database import TodoDatabase
+from todorama.backup import BackupManager
 
 # Import YAML test runner
 import sys
@@ -50,17 +51,27 @@ def temp_db():
     # Use SQLite for testing (conversation_storage will use db_adapter)
     conv_db_path = os.path.join(temp_dir, "test_conv.db")
     os.environ['DB_TYPE'] = 'sqlite'
-    from src.conversation_storage import ConversationStorage
+    from todorama.conversation_storage import ConversationStorage
     conversation_storage = ConversationStorage(conv_db_path)
     
     # Override the database, backup manager, and conversation storage in the app
-    import main
-    main.db = db
-    main.backup_manager = backup_manager
-    main.conversation_storage = conversation_storage
+    from todorama.dependencies.services import get_services
+    import todorama.dependencies.services as services_module
     
-    # Also override the service container so get_db() returns the test database
-    from dependencies.services import _service_instance, ServiceContainer
+    class MockServiceContainer:
+        def __init__(self, db, backup_manager, conversation_storage=None):
+            self.db = db
+            self.backup_manager = backup_manager
+            self.conversation_storage = conversation_storage
+            self.backup_scheduler = None
+            self.conversation_backup_manager = None
+            self.conversation_backup_scheduler = None
+            self.job_queue = None
+    
+    original_instance = services_module._service_instance
+    services_module._service_instance = MockServiceContainer(db, backup_manager, conversation_storage if 'conversation_storage' in locals() else None)
+        # Also override the service container so get_db() returns the test database
+    from todorama.dependencies.services import _service_instance, ServiceContainer
     # Create a mock service container with our test database
     class MockServiceContainer:
         def __init__(self, db, backup_manager, conversation_storage):
@@ -69,11 +80,13 @@ def temp_db():
             self.conversation_storage = conversation_storage
     
     # Override the global service instance
-    import dependencies.services as services_module
+    import todorama.dependencies.services as services_module
     original_instance = services_module._service_instance
     services_module._service_instance = MockServiceContainer(db, backup_manager, conversation_storage)
     
     yield db, db_path, backups_dir
+    # Restore original service instance
+    services_module._service_instance = original_instance
     
     # Restore original service instance
     services_module._service_instance = original_instance
@@ -170,7 +183,7 @@ def test_mcp_list_available_tasks(auth_client, temp_db):
     db, _, _ = temp_db
     
     # Set database for MCP API (required for MCP endpoints)
-    from mcp_api import set_db
+    from todorama.mcp_api import set_db
     set_db(db)
     
     # Create tasks using auth_client (which has project_id)
@@ -1427,9 +1440,9 @@ def test_create_task_from_template_with_overrides(client):
     # Note: FastAPI wraps body in parameter name when using Pydantic model
     response = client.post(f"/templates/{template_id}/create-task", json={
         "task_data": {
-            "title": "Custom Title",
-            "priority": "critical",
-            "notes": "Custom notes"
+        "title": "Custom Title",
+        "priority": "critical",
+        "notes": "Custom notes"
         }
     })
     assert response.status_code == 201
@@ -1845,7 +1858,7 @@ def test_health_check_database_connectivity(client):
 def test_health_check_database_failure_handling(client):
     """Test that health check handles database failures gracefully."""
     # Temporarily break database connection
-    from dependencies.services import get_services
+    from todorama.dependencies.services import get_services
     services = get_services()
     original_db = services.db
     
@@ -3660,12 +3673,12 @@ def test_get_stale_tasks_endpoint(auth_client):
     auth_client.post("/api/Task/lock", json={"task_id": task_id, "agent_id": "agent-1"})
     
     # Manually update task to be stale (requires direct DB access)
-    import main
-    conn = main.db._get_connection()
+    from todorama.dependencies.services import get_services
+    conn = get_services().db._get_connection()
     try:
         cursor = conn.cursor()
         old_time = datetime.utcnow() - timedelta(hours=25)
-        if main.db.db_type == "sqlite":
+        if get_services().db.db_type == "sqlite":
             cursor.execute("""
                 UPDATE tasks 
                 SET updated_at = ?
@@ -3679,7 +3692,7 @@ def test_get_stale_tasks_endpoint(auth_client):
             """, (old_time, task_id))
         conn.commit()
     finally:
-        main.db.adapter.close(conn)
+        get_services().db.adapter.close(conn)
     
     # Get stale tasks
     response = auth_client.get("/api/Task/get_stale", params={"hours": 24})
@@ -3715,12 +3728,12 @@ def test_manual_unlock_stale_task(auth_client):
     auth_client.post("/api/Task/lock", json={"task_id": task_id, "agent_id": "agent-1"})
     
     # Manually update task to be stale
-    import main
-    conn = main.db._get_connection()
+    from todorama.dependencies.services import get_services
+    conn = get_services().db._get_connection()
     try:
         cursor = conn.cursor()
         old_time = datetime.utcnow() - timedelta(hours=25)
-        if main.db.db_type == "sqlite":
+        if get_services().db.db_type == "sqlite":
             cursor.execute("""
                 UPDATE tasks 
                 SET updated_at = ?
@@ -3734,7 +3747,7 @@ def test_manual_unlock_stale_task(auth_client):
             """, (old_time, task_id))
         conn.commit()
     finally:
-        main.db.adapter.close(conn)
+        get_services().db.adapter.close(conn)
     
     # Manually unlock stale task
     response = auth_client.post("/api/Task/unlock_stale", json={"hours": 24, "system_agent_id": "system"})

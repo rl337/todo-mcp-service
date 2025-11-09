@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, ConsoleSpanExporter
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
 from tracing import (
     setup_tracing,
@@ -210,7 +210,7 @@ class TestTracingIntegration:
         try:
             # Import after setting up tracer
             import sys
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+            # Package is now at top level, no sys.path.insert needed
             from database import TodoDatabase
             
             # Create in-memory database for testing
@@ -234,9 +234,9 @@ class TestTracingIntegration:
         
         try:
             import sys
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+            # Package is now at top level, no sys.path.insert needed
             from database import TodoDatabase
-            from mcp_api import MCPTodoAPI, set_db
+            from todorama.mcp_api import MCPTodoAPI, set_db
             
             # Setup database and MCP API
             db = TodoDatabase(":memory:")

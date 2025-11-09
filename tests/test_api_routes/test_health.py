@@ -41,8 +41,8 @@ def client(app):
 class TestHealthCheck:
     """Test GET /health endpoint."""
     
-    @patch('api.routes.health.get_services')
-    @patch('api.routes.health.get_health_info')
+    @patch('todorama.api.routes.health.get_services')
+    @patch('todorama.api.routes.health.get_health_info')
     def test_health_check_healthy(
         self, mock_get_health_info, mock_get_services, client, mock_services
     ):
@@ -62,8 +62,8 @@ class TestHealthCheck:
         assert data["database"] == "connected"
         mock_get_health_info.assert_called_once_with(mock_services.db)
     
-    @patch('api.routes.health.get_services')
-    @patch('api.routes.health.get_health_info')
+    @patch('todorama.api.routes.health.get_services')
+    @patch('todorama.api.routes.health.get_health_info')
     def test_health_check_unhealthy(
         self, mock_get_health_info, mock_get_services, client, mock_services
     ):
@@ -87,8 +87,8 @@ class TestHealthCheck:
 class TestMetrics:
     """Test GET /metrics endpoint."""
     
-    @patch('api.routes.health.get_metrics')
-    @patch('api.routes.health.MetricsAdapter')
+    @patch('todorama.api.routes.health.get_metrics')
+    @patch('todorama.api.routes.health.MetricsAdapter')
     def test_metrics_success(self, mock_metrics_adapter_class, mock_get_metrics, client):
         """Test successful metrics retrieval."""
         mock_get_metrics.return_value = "test_metric 1.0\n"

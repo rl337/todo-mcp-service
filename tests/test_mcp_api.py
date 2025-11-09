@@ -14,12 +14,13 @@ os.environ["RATE_LIMIT_USER_MAX"] = "10000"
 os.environ["RATE_LIMIT_AGENT_MAX"] = "10000"
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from main import app
-from database import TodoDatabase
-from backup import BackupManager
-from mcp_api import MCPTodoAPI
+from todorama.app import create_app
+app = create_app()
+from todorama.database import TodoDatabase
+from todorama.backup import BackupManager
+from todorama.mcp_api import MCPTodoAPI
 
 
 @pytest.fixture
@@ -32,18 +33,30 @@ def temp_db():
     db = TodoDatabase(db_path)
     backup_manager = BackupManager(db_path, backups_dir)
     
-    import main
-    main.db = db
-    main.backup_manager = backup_manager
+    from todorama.dependencies.services import get_services
+    import todorama.dependencies.services as services_module
+    
+    class MockServiceContainer:
+        def __init__(self, db, backup_manager, conversation_storage=None):
+            self.db = db
+            self.backup_manager = backup_manager
+            self.conversation_storage = conversation_storage
+            self.backup_scheduler = None
+            self.conversation_backup_manager = None
+            self.conversation_backup_scheduler = None
+            self.job_queue = None
+    
+    original_instance = services_module._service_instance
+    services_module._service_instance = MockServiceContainer(db, backup_manager, conversation_storage if 'conversation_storage' in locals() else None)
     
     # Set the MCP API database instance
-    from mcp_api import set_db
+    from todorama.mcp_api import set_db
     set_db(db)
     
     # Also update the service container's database instance
     # This ensures REST API endpoints use the same database as MCP API
-    from dependencies.services import get_services, _service_instance
-    import dependencies.services as services_module
+    from todorama.dependencies.services import get_services, _service_instance
+    import todorama.dependencies.services as services_module
     # Always update the service container if it exists, or create it if it doesn't
     services = get_services()
     services.db = db
@@ -52,6 +65,8 @@ def temp_db():
     set_db(db)
     
     yield db, db_path, backups_dir
+    # Restore original service instance
+    services_module._service_instance = original_instance
     
     shutil.rmtree(temp_dir)
 
@@ -2487,12 +2502,12 @@ def test_mcp_query_stale_tasks(auth_client):
     auth_client.post("/mcp/reserve_task", json={"task_id": task_id, "agent_id": "agent-1"})
     
     # Manually update task to be stale
-    import main
-    conn = main.db._get_connection()
+    from todorama.dependencies.services import get_services
+    conn = get_services().db._get_connection()
     try:
         cursor = conn.cursor()
         old_time = datetime.utcnow() - timedelta(hours=25)
-        if main.db.db_type == "sqlite":
+        if get_services().db.db_type == "sqlite":
             cursor.execute("""
                 UPDATE tasks 
                 SET updated_at = ?
@@ -2506,7 +2521,7 @@ def test_mcp_query_stale_tasks(auth_client):
             """, (old_time, task_id))
         conn.commit()
     finally:
-        main.db.adapter.close(conn)
+        get_services().db.adapter.close(conn)
     
     # Query stale tasks via MCP
     response = auth_client.post("/mcp/sse", json={

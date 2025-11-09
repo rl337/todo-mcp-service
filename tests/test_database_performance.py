@@ -9,9 +9,9 @@ import shutil
 import time
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from database import TodoDatabase
+from todorama.database import TodoDatabase
 
 
 @pytest.fixture

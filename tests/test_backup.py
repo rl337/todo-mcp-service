@@ -10,10 +10,10 @@ import gzip
 from pathlib import Path
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from database import TodoDatabase
-from backup import BackupManager
+from todorama.database import TodoDatabase
+from todorama.backup import BackupManager
 
 
 @pytest.fixture

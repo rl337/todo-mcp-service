@@ -20,12 +20,13 @@ os.environ.setdefault('RATE_LIMIT_USER_MAX', '10000')
 os.environ.setdefault('RATE_LIMIT_USER_WINDOW', '60')
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
 from fastapi.testclient import TestClient
-from main import app
-from database import TodoDatabase
-from backup import BackupManager
+from todorama.app import create_app
+app = create_app()
+from todorama.database import TodoDatabase
+from todorama.backup import BackupManager
 
 # Import fixtures from original test file
 # (We'll need to copy the fixtures or import them)

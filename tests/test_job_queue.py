@@ -10,7 +10,7 @@ from typing import Dict, Any
 # Import job queue components
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
 from job_queue import (
     JobQueue, JobStatus, JobType, JobPriority,

@@ -8,9 +8,9 @@ import tempfile
 from datetime import datetime
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from conversation_storage import ConversationStorage
+from todorama.conversation_storage import ConversationStorage
 
 
 @pytest.fixture
@@ -936,7 +936,7 @@ async def test_stream_llm_response_success(monkeypatch):
     except (psycopg2.OperationalError, psycopg2.Error):
         pytest.skip("PostgreSQL not available")
     
-    from conversation_storage import ConversationStorage
+    from todorama.conversation_storage import ConversationStorage
     import httpx
     from unittest.mock import AsyncMock, MagicMock, patch
     
@@ -1012,7 +1012,7 @@ async def test_stream_llm_response_with_system_prompt(monkeypatch):
     except (psycopg2.OperationalError, psycopg2.Error):
         pytest.skip("PostgreSQL not available")
     
-    from conversation_storage import ConversationStorage
+    from todorama.conversation_storage import ConversationStorage
     import httpx
     from unittest.mock import AsyncMock, MagicMock, patch
     
@@ -1086,7 +1086,7 @@ async def test_stream_llm_response_llm_disabled():
     except (psycopg2.OperationalError, psycopg2.Error):
         pytest.skip("PostgreSQL not available")
     
-    from conversation_storage import ConversationStorage
+    from todorama.conversation_storage import ConversationStorage
     
     storage = ConversationStorage()
     storage.llm_enabled = False

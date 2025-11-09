@@ -14,8 +14,8 @@ from unittest.mock import Mock, MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api.routes import projects
-from models.project_models import ProjectCreate, ProjectResponse
+from todorama.api.routes import projects
+from todorama.models.project_models import ProjectCreate, ProjectResponse
 
 
 @pytest.fixture
@@ -79,7 +79,7 @@ def client(app):
 class TestCreateProject:
     """Test POST /projects endpoint."""
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_create_project_success(self, mock_get_db, client, mock_db):
         """Test successful project creation."""
         mock_get_db.return_value = mock_db
@@ -102,7 +102,7 @@ class TestCreateProject:
         mock_db.create_project.assert_called_once()
         mock_db.get_project.assert_called_once_with(1)
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_create_project_validation_error(self, mock_get_db, client, mock_db):
         """Test project creation with validation error."""
         mock_get_db.return_value = mock_db
@@ -112,7 +112,7 @@ class TestCreateProject:
         
         assert response.status_code == 422  # Validation error
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_create_project_duplicate_name(self, mock_get_db, client, mock_db):
         """Test project creation with duplicate name."""
         mock_get_db.return_value = mock_db
@@ -131,7 +131,7 @@ class TestCreateProject:
         assert response.status_code == 409
         assert "already exists" in response.json()["detail"].lower()
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_create_project_retrieval_failure(self, mock_get_db, client, mock_db):
         """Test project creation when retrieval fails."""
         mock_get_db.return_value = mock_db
@@ -154,8 +154,8 @@ class TestCreateProject:
 class TestListProjects:
     """Test GET /projects endpoint."""
     
-    @patch('api.routes.projects.get_db')
-    @patch('api.routes.projects.optional_api_key')
+    @patch('todorama.api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.optional_api_key')
     def test_list_projects_success_without_auth(
         self, mock_optional_auth, mock_get_db, client, mock_db
     ):
@@ -173,8 +173,8 @@ class TestListProjects:
         assert data[1]["id"] == 2
         mock_db.list_projects.assert_called_once()
     
-    @patch('api.routes.projects.get_db')
-    @patch('api.routes.projects.optional_api_key')
+    @patch('todorama.api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.optional_api_key')
     def test_list_projects_success_with_auth(
         self, mock_optional_auth, mock_get_db, client, mock_db, mock_auth
     ):
@@ -190,8 +190,8 @@ class TestListProjects:
         assert len(data) == 2
         mock_db.list_projects.assert_called_once()
     
-    @patch('api.routes.projects.get_db')
-    @patch('api.routes.projects.optional_api_key')
+    @patch('todorama.api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.optional_api_key')
     def test_list_projects_empty(self, mock_optional_auth, mock_get_db, client, mock_db):
         """Test project listing when no projects exist."""
         mock_get_db.return_value = mock_db
@@ -209,7 +209,7 @@ class TestListProjects:
 class TestGetProject:
     """Test GET /projects/{project_id} endpoint."""
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_get_project_success(self, mock_get_db, client, mock_db):
         """Test successful project retrieval by ID."""
         mock_get_db.return_value = mock_db
@@ -222,7 +222,7 @@ class TestGetProject:
         assert data["name"] == "Test Project"
         mock_db.get_project.assert_called_once_with(1)
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_get_project_not_found(self, mock_get_db, client, mock_db):
         """Test project retrieval when project not found."""
         mock_get_db.return_value = mock_db
@@ -234,7 +234,7 @@ class TestGetProject:
         assert "not found" in response.json()["detail"].lower()
         assert "999" in response.json()["detail"]
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_get_project_invalid_id(self, mock_get_db, client, mock_db):
         """Test project retrieval with invalid project_id."""
         mock_get_db.return_value = mock_db
@@ -243,7 +243,7 @@ class TestGetProject:
         
         assert response.status_code == 422  # Validation error (gt=0 constraint)
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_get_project_non_numeric_id(self, mock_get_db, client, mock_db):
         """Test project retrieval with non-numeric project_id."""
         mock_get_db.return_value = mock_db
@@ -256,7 +256,7 @@ class TestGetProject:
 class TestGetProjectByName:
     """Test GET /projects/name/{project_name} endpoint."""
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_get_project_by_name_success(self, mock_get_db, client, mock_db):
         """Test successful project retrieval by name."""
         mock_get_db.return_value = mock_db
@@ -269,7 +269,7 @@ class TestGetProjectByName:
         assert data["name"] == "Test Project"
         mock_db.get_project_by_name.assert_called_once_with("Test Project")
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_get_project_by_name_not_found(self, mock_get_db, client, mock_db):
         """Test project retrieval when project name not found."""
         mock_get_db.return_value = mock_db
@@ -281,7 +281,7 @@ class TestGetProjectByName:
         assert "not found" in response.json()["detail"].lower()
         assert "Nonexistent" in response.json()["detail"]
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_get_project_by_name_empty(self, mock_get_db, client, mock_db):
         """Test project retrieval with empty project name."""
         mock_get_db.return_value = mock_db
@@ -291,7 +291,7 @@ class TestGetProjectByName:
         # Empty path parameter should be caught by FastAPI validation
         assert response.status_code in [404, 422]
     
-    @patch('api.routes.projects.get_db')
+    @patch('todorama.api.routes.projects.get_db')
     def test_get_project_by_name_whitespace(self, mock_get_db, client, mock_db):
         """Test project retrieval with whitespace-only name."""
         mock_get_db.return_value = mock_db

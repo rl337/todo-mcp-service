@@ -9,11 +9,12 @@ import json
 from fastapi.testclient import TestClient
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from main import app
-from database import TodoDatabase
-from backup import BackupManager
+from todorama.app import create_app
+app = create_app()
+from todorama.database import TodoDatabase
+from todorama.backup import BackupManager
 
 
 @pytest.fixture
@@ -31,19 +32,33 @@ def temp_db():
     # Use SQLite for testing (conversation_storage will use db_adapter)
     conv_db_path = os.path.join(temp_dir, "test_conv.db")
     os.environ['DB_TYPE'] = 'sqlite'
-    from conversation_storage import ConversationStorage
+    from todorama.conversation_storage import ConversationStorage
     conversation_storage = ConversationStorage(conv_db_path)
     
-    # Override the database, backup manager, and conversation storage in the app
-    import main
-    import mcp_api
-    main.db = db
-    main.backup_manager = backup_manager
-    main.conversation_storage = conversation_storage
+    # Override the database, backup manager, and conversation storage via service container
+    from todorama.dependencies.services import get_services
+    import todorama.mcp_api as mcp_api
+    
+    # Create a mock service container with our test database
+    class MockServiceContainer:
+        def __init__(self, db, backup_manager, conversation_storage):
+            self.db = db
+            self.backup_manager = backup_manager
+            self.conversation_storage = conversation_storage
+            self.backup_scheduler = None
+            self.conversation_backup_manager = None
+            self.conversation_backup_scheduler = None
+            self.job_queue = None
+    
+    # Override the global service instance
+    import todorama.dependencies.services as services_module
+    original_instance = services_module._service_instance
+    services_module._service_instance = MockServiceContainer(db, backup_manager, conversation_storage)
+    
     mcp_api.set_db(db)
     
     # Also override the service container so get_db() returns the test database
-    from dependencies.services import _service_instance, ServiceContainer
+    from todorama.dependencies.services import _service_instance, ServiceContainer
     # Create a mock service container with our test database
     class MockServiceContainer:
         def __init__(self, db, backup_manager, conversation_storage):
@@ -52,11 +67,13 @@ def temp_db():
             self.conversation_storage = conversation_storage
     
     # Override the global service instance
-    import dependencies.services as services_module
+    import todorama.dependencies.services as services_module
     original_instance = services_module._service_instance
     services_module._service_instance = MockServiceContainer(db, backup_manager, conversation_storage)
     
     yield db, db_path, backups_dir
+    # Restore original service instance
+    services_module._service_instance = original_instance
     
     # Restore original service instance
     services_module._service_instance = original_instance

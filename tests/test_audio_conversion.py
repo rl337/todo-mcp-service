@@ -10,7 +10,7 @@ import io
 from pathlib import Path
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
 from audio_converter import AudioConverter, AudioConversionError, TelegramAudioConverter
 

@@ -33,7 +33,7 @@ def client(app):
 class TestCreateTask:
     """Test POST /mcp/create_task endpoint."""
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_create_task_success(self, mock_mcp_api, client):
         """Test successful task creation."""
         mock_mcp_api.create_task.return_value = {
@@ -60,7 +60,7 @@ class TestCreateTask:
         assert data["task_id"] == 1
         mock_mcp_api.create_task.assert_called_once()
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_create_task_validation_error(self, mock_mcp_api_class, client):
         """Test task creation with validation error."""
         # Missing required fields
@@ -72,7 +72,7 @@ class TestCreateTask:
 class TestGetAgentPerformance:
     """Test POST /mcp/get_agent_performance endpoint."""
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_get_agent_performance_success(self, mock_mcp_api, client):
         """Test successful agent performance retrieval."""
         mock_mcp_api.get_agent_performance.return_value = {
@@ -96,7 +96,7 @@ class TestGetAgentPerformance:
         assert data["tasks_completed"] == 10
         mock_mcp_api.get_agent_performance.assert_called_once_with("test-agent", "concrete")
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_get_agent_performance_validation_error(self, mock_mcp_api, client):
         """Test agent performance retrieval with validation error."""
         # Missing required agent_id
@@ -108,7 +108,7 @@ class TestGetAgentPerformance:
 class TestUnlockTask:
     """Test POST /mcp/unlock_task endpoint."""
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_unlock_task_success(self, mock_mcp_api, client):
         """Test successful task unlock."""
         mock_mcp_api.unlock_task.return_value = {
@@ -129,7 +129,7 @@ class TestUnlockTask:
         assert data["success"] is True
         mock_mcp_api.unlock_task.assert_called_once_with(1, "test-agent")
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_unlock_task_validation_error(self, mock_mcp_api, client):
         """Test task unlock with validation error."""
         # Missing required fields
@@ -141,7 +141,7 @@ class TestUnlockTask:
 class TestQueryTasks:
     """Test POST /mcp/query_tasks endpoint."""
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_query_tasks_success(self, mock_mcp_api, client):
         """Test successful task query."""
         mock_mcp_api.query_tasks.return_value = [
@@ -164,7 +164,7 @@ class TestQueryTasks:
         assert len(data["tasks"]) == 2
         mock_mcp_api.query_tasks.assert_called_once()
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_query_tasks_empty(self, mock_mcp_api, client):
         """Test task query with no results."""
         mock_mcp_api.query_tasks.return_value = []
@@ -185,7 +185,7 @@ class TestQueryTasks:
 class TestAddTaskUpdate:
     """Test POST /mcp/add_task_update endpoint."""
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_add_task_update_success(self, mock_mcp_api, client):
         """Test successful task update addition."""
         mock_mcp_api.add_task_update.return_value = {
@@ -209,7 +209,7 @@ class TestAddTaskUpdate:
         assert data["update_id"] == 1
         mock_mcp_api.add_task_update.assert_called_once()
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_add_task_update_validation_error(self, mock_mcp_api, client):
         """Test task update addition with validation error."""
         # Missing required fields
@@ -221,7 +221,7 @@ class TestAddTaskUpdate:
 class TestGetTaskContext:
     """Test POST /mcp/get_task_context endpoint."""
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_get_task_context_success(self, mock_mcp_api, client):
         """Test successful task context retrieval."""
         mock_mcp_api.get_task_context.return_value = {
@@ -246,7 +246,7 @@ class TestGetTaskContext:
         assert data["task"]["id"] == 1
         mock_mcp_api.get_task_context.assert_called_once_with(1)
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_get_task_context_validation_error(self, mock_mcp_api, client):
         """Test task context retrieval with validation error."""
         # Missing required task_id
@@ -258,7 +258,7 @@ class TestGetTaskContext:
 class TestSearchTasks:
     """Test POST /mcp/search_tasks endpoint."""
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_search_tasks_success(self, mock_mcp_api, client):
         """Test successful task search."""
         mock_mcp_api.search_tasks.return_value = [
@@ -280,7 +280,7 @@ class TestSearchTasks:
         assert len(data["tasks"]) == 2
         mock_mcp_api.search_tasks.assert_called_once_with("test", 10)
     
-    @patch('api.routes.mcp.MCPTodoAPI')
+    @patch('todorama.api.routes.mcp.MCPTodoAPI')
     def test_search_tasks_validation_error(self, mock_mcp_api, client):
         """Test task search with validation error."""
         # Missing required query

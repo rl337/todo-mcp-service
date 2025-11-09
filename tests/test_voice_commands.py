@@ -15,7 +15,7 @@ import struct
 from unittest.mock import Mock, patch, MagicMock
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
 try:
     from voice_commands import (

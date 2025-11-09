@@ -20,11 +20,12 @@ os.environ["TODO_DB_PATH"] = os.path.join(test_db_dir, "test_todos.db")
 os.environ["TODO_BACKUPS_DIR"] = os.path.join(test_db_dir, "test_backups")
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from main import app
-from database import TodoDatabase
-from backup import BackupManager
+from todorama.app import create_app
+app = create_app()
+from todorama.database import TodoDatabase
+from todorama.backup import BackupManager
 
 
 @pytest.fixture
@@ -42,30 +43,31 @@ def temp_db():
     # Use SQLite for testing (conversation_storage will use db_adapter)
     conv_db_path = os.path.join(temp_dir, "test_conv.db")
     os.environ['DB_TYPE'] = 'sqlite'
-    from conversation_storage import ConversationStorage
+    from todorama.conversation_storage import ConversationStorage
     conversation_storage = ConversationStorage(conv_db_path)
     
-    # Override the database, backup manager, and conversation storage in the app
-    import main
-    import mcp_api
-    main.db = db
-    main.backup_manager = backup_manager
-    main.conversation_storage = conversation_storage
-    mcp_api.set_db(db)
+    # Override the database, backup manager, and conversation storage via service container
+    from todorama.dependencies.services import get_services
+    import todorama.mcp_api as mcp_api
     
-    # Also override the service container so get_db() returns the test database
-    from dependencies.services import _service_instance, ServiceContainer
     # Create a mock service container with our test database
     class MockServiceContainer:
         def __init__(self, db, backup_manager, conversation_storage):
             self.db = db
             self.backup_manager = backup_manager
             self.conversation_storage = conversation_storage
+            # Add other required attributes
+            self.backup_scheduler = None
+            self.conversation_backup_manager = None
+            self.conversation_backup_scheduler = None
+            self.job_queue = None
     
     # Override the global service instance
-    import dependencies.services as services_module
+    import todorama.dependencies.services as services_module
     original_instance = services_module._service_instance
     services_module._service_instance = MockServiceContainer(db, backup_manager, conversation_storage)
+    
+    mcp_api.set_db(db)
     
     yield db, db_path, backups_dir
     
@@ -106,14 +108,12 @@ def test_full_workflow_single_agent(client, api_key_and_headers):
     
     # 2. Create task
     task_response = client.post("/tasks", json={
-        "task": {
-            "title": "Integration Test Task",
-            "task_type": "concrete",
-            "task_instruction": "Complete the integration test workflow",
-            "verification_instruction": "Verify all steps completed successfully",
-            "agent_id": "test-agent",
-            "project_id": project_id
-        }
+        "title": "Integration Test Task",
+        "task_type": "concrete",
+        "task_instruction": "Complete the integration test workflow",
+        "verification_instruction": "Verify all steps completed successfully",
+        "agent_id": "test-agent",
+        "project_id": project_id
     }, headers=headers)
     if task_response.status_code != 201:
         print(f"Task creation failed with status {task_response.status_code}")
@@ -201,14 +201,12 @@ def test_full_workflow_with_parent_child(client, api_key_and_headers):
     
     # 2. Create parent task (abstract)
     parent_response = client.post("/tasks", json={
-        "task": {
-            "title": "Parent Task",
-            "task_type": "abstract",
-            "task_instruction": "Break down into subtasks",
-            "verification_instruction": "Verify all subtasks complete",
-            "agent_id": "breakdown-agent",
-            "project_id": project_id
-        }
+        "title": "Parent Task",
+        "task_type": "abstract",
+        "task_instruction": "Break down into subtasks",
+        "verification_instruction": "Verify all subtasks complete",
+        "agent_id": "breakdown-agent",
+        "project_id": project_id
     }, headers=headers)
     parent_id = parent_response.json()["id"]
     
@@ -265,38 +263,32 @@ def test_workflow_multiple_agents(client, api_key_and_headers):
     
     # Create multiple tasks
     task1_response = client.post("/tasks", json={
-        "task": {
-            "title": "Task 1",
-            "task_type": "concrete",
-            "task_instruction": "Task for agent-1",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": project_id
-        }
+        "title": "Task 1",
+        "task_type": "concrete",
+        "task_instruction": "Task for agent-1",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": project_id
     }, headers=headers)
     task1_id = task1_response.json()["id"]
 
     task2_response = client.post("/tasks", json={
-        "task": {
-            "title": "Task 2",
-            "task_type": "concrete",
-            "task_instruction": "Task for agent-2",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": project_id
-        }
+        "title": "Task 2",
+        "task_type": "concrete",
+        "task_instruction": "Task for agent-2",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": project_id
     }, headers=headers)
     task2_id = task2_response.json()["id"]
 
     task3_response = client.post("/tasks", json={
-        "task": {
-            "title": "Task 3",
-            "task_type": "concrete",
-            "task_instruction": "Task for agent-3",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": project_id
-        }
+        "title": "Task 3",
+        "task_type": "concrete",
+        "task_instruction": "Task for agent-3",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": project_id
     }, headers=headers)
     task3_id = task3_response.json()["id"]
     
@@ -353,7 +345,7 @@ def test_workflow_multiple_agents(client, api_key_and_headers):
     # Verify agent performance tracking
     for agent_id in ["agent-1", "agent-2", "agent-3"]:
         perf_response = client.post("/mcp/get_agent_performance", json={
-            "agent_id": agent_id
+        "agent_id": agent_id
         })
         assert perf_response.status_code == 200
         perf_data = perf_response.json()
@@ -367,14 +359,12 @@ def test_concurrent_reserve_operations(client, api_key_and_headers):
     
     # Create a task
     task_response = client.post("/tasks", json={
-        "task": {
-            "title": "Concurrent Test Task",
-            "task_type": "concrete",
-            "task_instruction": "Test concurrent access",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": default_project_id
-        }
+        "title": "Concurrent Test Task",
+        "task_type": "concrete",
+        "task_instruction": "Test concurrent access",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": default_project_id
     }, headers=headers)
     task_id = task_response.json()["id"]
     
@@ -384,7 +374,7 @@ def test_concurrent_reserve_operations(client, api_key_and_headers):
     def reserve_task(agent_id):
         response = client.post("/mcp/reserve_task", json={
             "task_id": task_id,
-            "agent_id": agent_id
+        "agent_id": agent_id
         })
         return agent_id, response.json()
     
@@ -412,14 +402,12 @@ def test_concurrent_complete_operations(client, api_key_and_headers):
     
     # Create and reserve task
     task_response = client.post("/tasks", json={
-        "task": {
-            "title": "Concurrent Complete Task",
-            "task_type": "concrete",
-            "task_instruction": "Test concurrent completion",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": default_project_id
-        }
+        "title": "Concurrent Complete Task",
+        "task_type": "concrete",
+        "task_instruction": "Test concurrent completion",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": default_project_id
     }, headers=headers)
     if task_response.status_code != 201:
         print(f"Task creation failed with status {task_response.status_code}")
@@ -440,7 +428,7 @@ def test_concurrent_complete_operations(client, api_key_and_headers):
     def complete_task(agent_id):
         response = client.post("/mcp/complete_task", json={
             "task_id": task_id,
-            "agent_id": agent_id,
+        "agent_id": agent_id,
             "notes": f"Completed by {agent_id}"
         })
         return agent_id, response.json()
@@ -484,14 +472,12 @@ def test_workflow_with_error_scenarios(client, api_key_and_headers):
     
     # 2. Create task, reserve, then try to reserve again
     task_response = client.post("/tasks", json={
-        "task": {
-            "title": "Error Test Task",
-            "task_type": "concrete",
-            "task_instruction": "Test errors",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": default_project_id
-        }
+        "title": "Error Test Task",
+        "task_type": "concrete",
+        "task_instruction": "Test errors",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": default_project_id
     }, headers=headers)
     task_id = task_response.json()["id"]
     
@@ -527,14 +513,12 @@ def test_workflow_with_error_scenarios(client, api_key_and_headers):
     
     # 5. Try to add update with empty content (should fail)
     task2_response = client.post("/tasks", json={
-        "task": {
-            "title": "Empty Update Test",
-            "task_type": "concrete",
-            "task_instruction": "Test",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": default_project_id
-        }
+        "title": "Empty Update Test",
+        "task_type": "concrete",
+        "task_instruction": "Test",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": default_project_id
     }, headers=headers)
     task2_id = task2_response.json()["id"]
     
@@ -553,14 +537,12 @@ def test_workflow_with_followup_task(client, api_key_and_headers):
     
     # Create and reserve task
     task_response = client.post("/tasks", json={
-        "task": {
-            "title": "Parent Followup Task",
-            "task_type": "concrete",
-            "task_instruction": "Complete and create followup",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": default_project_id
-        }
+        "title": "Parent Followup Task",
+        "task_type": "concrete",
+        "task_instruction": "Complete and create followup",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": default_project_id
     }, headers=headers)
     task_id = task_response.json()["id"]
     
@@ -606,14 +588,12 @@ def test_full_workflow_with_unlock(client, api_key_and_headers):
     
     # Create and reserve task
     task_response = client.post("/tasks", json={
-        "task": {
-            "title": "Unlock Test Task",
-            "task_type": "concrete",
-            "task_instruction": "Test unlock workflow",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": default_project_id
-        }
+        "title": "Unlock Test Task",
+        "task_type": "concrete",
+        "task_instruction": "Test unlock workflow",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": default_project_id
     }, headers=headers)
     task_id = task_response.json()["id"]
     
@@ -669,27 +649,23 @@ def test_workflow_query_and_search(client, api_key_and_headers):
     
     # Create multiple tasks with different attributes
     task1 = client.post("/tasks", json={
-        "task": {
-            "title": "High Priority Task",
-            "task_type": "concrete",
-            "task_instruction": "Do important work",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": project_id,
+        "title": "High Priority Task",
+        "task_type": "concrete",
+        "task_instruction": "Do important work",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": project_id,
             "priority": "high"
-        }
     }, headers=headers).json()["id"]
 
     task2 = client.post("/tasks", json={
-        "task": {
-            "title": "Low Priority Task",
-            "task_type": "concrete",
-            "task_instruction": "Do less important work",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": project_id,
+        "title": "Low Priority Task",
+        "task_type": "concrete",
+        "task_instruction": "Do less important work",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": project_id,
             "priority": "low"
-        }
     }, headers=headers).json()["id"]
     
     # Query tasks by priority
@@ -736,14 +712,12 @@ def test_workflow_with_context_retrieval(client, api_key_and_headers):
     
     # Create parent task
     parent = client.post("/tasks", json={
-        "task": {
-            "title": "Parent Context Task",
-            "task_type": "abstract",
-            "task_instruction": "Parent task",
-            "verification_instruction": "Verify",
-            "agent_id": "test-agent",
-            "project_id": project_id
-        }
+        "title": "Parent Context Task",
+        "task_type": "abstract",
+        "task_instruction": "Parent task",
+        "verification_instruction": "Verify",
+        "agent_id": "test-agent",
+        "project_id": project_id
     }, headers=headers).json()["id"]
     
     # Create child task with relationship

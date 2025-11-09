@@ -14,9 +14,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from fastapi.exceptions import RequestValidationError
 
-from api.routes import tasks
-from models.task_models import TaskCreate, TaskResponse
-from services.task_service import TaskService
+from todorama.api.routes import tasks
+from todorama.models.task_models import TaskCreate, TaskResponse
+from todorama.services.task_service import TaskService
 
 
 @pytest.fixture
@@ -78,10 +78,10 @@ def client(app):
 class TestCreateTask:
     """Test POST /tasks endpoint."""
     
-    @patch('api.routes.tasks.get_db')
-    @patch('api.routes.tasks.verify_api_key')
-    @patch('api.routes.tasks.notify_webhooks')
-    @patch('api.routes.tasks.send_task_notification')
+    @patch('todorama.api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.verify_api_key')
+    @patch('todorama.api.routes.tasks.notify_webhooks')
+    @patch('todorama.api.routes.tasks.send_task_notification')
     def test_create_task_success(
         self, mock_slack, mock_webhooks, mock_verify_auth, mock_get_db,
         client, mock_db, mock_task_service, mock_auth
@@ -93,7 +93,7 @@ class TestCreateTask:
         mock_webhooks.return_value = None
         
         # Mock TaskService dependency
-        with patch('api.routes.tasks.get_task_service', return_value=mock_task_service):
+        with patch('todorama.api.routes.tasks.get_task_service', return_value=mock_task_service):
             response = client.post(
                 "/tasks",
                 json={
@@ -120,8 +120,8 @@ class TestCreateTask:
         assert call_args[0][0].title == "Test Task"
         assert call_args[0][1] == mock_auth
     
-    @patch('api.routes.tasks.get_db')
-    @patch('api.routes.tasks.verify_api_key')
+    @patch('todorama.api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.verify_api_key')
     def test_create_task_validation_error(
         self, mock_verify_auth, mock_get_db, client, mock_db, mock_auth
     ):
@@ -134,8 +134,8 @@ class TestCreateTask:
         
         assert response.status_code == 422  # Validation error
     
-    @patch('api.routes.tasks.get_db')
-    @patch('api.routes.tasks.verify_api_key')
+    @patch('todorama.api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.verify_api_key')
     def test_create_task_not_found_error(
         self, mock_verify_auth, mock_get_db, client, mock_db, mock_task_service, mock_auth
     ):
@@ -144,7 +144,7 @@ class TestCreateTask:
         mock_verify_auth.return_value = mock_auth
         mock_task_service.create_task.side_effect = ValueError("Project not found")
         
-        with patch('api.routes.tasks.get_task_service', return_value=mock_task_service):
+        with patch('todorama.api.routes.tasks.get_task_service', return_value=mock_task_service):
             response = client.post(
                 "/tasks",
                 json={
@@ -160,8 +160,8 @@ class TestCreateTask:
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
     
-    @patch('api.routes.tasks.get_db')
-    @patch('api.routes.tasks.verify_api_key')
+    @patch('todorama.api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.verify_api_key')
     def test_create_task_unauthorized_error(
         self, mock_verify_auth, mock_get_db, client, mock_db, mock_task_service, mock_auth
     ):
@@ -170,7 +170,7 @@ class TestCreateTask:
         mock_verify_auth.return_value = mock_auth
         mock_task_service.create_task.side_effect = ValueError("not authorized")
         
-        with patch('api.routes.tasks.get_task_service', return_value=mock_task_service):
+        with patch('todorama.api.routes.tasks.get_task_service', return_value=mock_task_service):
             response = client.post(
                 "/tasks",
                 json={
@@ -186,8 +186,8 @@ class TestCreateTask:
         assert response.status_code == 403
         assert "not authorized" in response.json()["detail"].lower()
     
-    @patch('api.routes.tasks.get_db')
-    @patch('api.routes.tasks.verify_api_key')
+    @patch('todorama.api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.verify_api_key')
     def test_create_task_unexpected_error(
         self, mock_verify_auth, mock_get_db, client, mock_db, mock_task_service, mock_auth
     ):
@@ -196,7 +196,7 @@ class TestCreateTask:
         mock_verify_auth.return_value = mock_auth
         mock_task_service.create_task.side_effect = Exception("Unexpected error")
         
-        with patch('api.routes.tasks.get_task_service', return_value=mock_task_service):
+        with patch('todorama.api.routes.tasks.get_task_service', return_value=mock_task_service):
             response = client.post(
                 "/tasks",
                 json={
@@ -212,8 +212,8 @@ class TestCreateTask:
         assert response.status_code == 500
         assert "Failed to create task" in response.json()["detail"]
     
-    @patch('api.routes.tasks.get_db')
-    @patch('api.routes.tasks.verify_api_key')
+    @patch('todorama.api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.verify_api_key')
     def test_create_task_authentication_required(
         self, mock_verify_auth, mock_get_db, client, mock_db
     ):
@@ -240,7 +240,7 @@ class TestCreateTask:
 class TestQueryTasks:
     """Test GET /tasks endpoint."""
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_query_tasks_success(self, mock_get_db, client, mock_db):
         """Test successful task query."""
         mock_get_db.return_value = mock_db
@@ -254,7 +254,7 @@ class TestQueryTasks:
         assert data[0]["id"] == 1
         assert data[1]["id"] == 2
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_query_tasks_with_filters(self, mock_get_db, client, mock_db):
         """Test task query with filters."""
         mock_get_db.return_value = mock_db
@@ -268,7 +268,7 @@ class TestQueryTasks:
         assert call_kwargs["task_status"] == "available"
         assert call_kwargs["limit"] == 10
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_query_tasks_invalid_task_type(self, mock_get_db, client, mock_db):
         """Test task query with invalid task_type."""
         mock_get_db.return_value = mock_db
@@ -278,7 +278,7 @@ class TestQueryTasks:
         assert response.status_code == 400
         assert "Invalid task_type" in response.json()["detail"]
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_query_tasks_invalid_task_status(self, mock_get_db, client, mock_db):
         """Test task query with invalid task_status."""
         mock_get_db.return_value = mock_db
@@ -288,7 +288,7 @@ class TestQueryTasks:
         assert response.status_code == 400
         assert "Invalid task_status" in response.json()["detail"]
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_query_tasks_invalid_priority(self, mock_get_db, client, mock_db):
         """Test task query with invalid priority."""
         mock_get_db.return_value = mock_db
@@ -298,7 +298,7 @@ class TestQueryTasks:
         assert response.status_code == 400
         assert "Invalid priority" in response.json()["detail"]
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_query_tasks_invalid_order_by(self, mock_get_db, client, mock_db):
         """Test task query with invalid order_by."""
         mock_get_db.return_value = mock_db
@@ -308,7 +308,7 @@ class TestQueryTasks:
         assert response.status_code == 400
         assert "Invalid order_by" in response.json()["detail"]
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_query_tasks_invalid_limit(self, mock_get_db, client, mock_db):
         """Test task query with invalid limit."""
         mock_get_db.return_value = mock_db
@@ -317,7 +317,7 @@ class TestQueryTasks:
         
         assert response.status_code == 422  # Validation error
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_query_tasks_invalid_tag_ids_format(self, mock_get_db, client, mock_db):
         """Test task query with invalid tag_ids format."""
         mock_get_db.return_value = mock_db
@@ -327,7 +327,7 @@ class TestQueryTasks:
         assert response.status_code == 400
         assert "Invalid tag_ids format" in response.json()["detail"]
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_query_tasks_invalid_date_format(self, mock_get_db, client, mock_db):
         """Test task query with invalid date format."""
         mock_get_db.return_value = mock_db
@@ -341,12 +341,12 @@ class TestQueryTasks:
 class TestGetTask:
     """Test GET /tasks/{task_id} endpoint."""
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_get_task_success(self, mock_get_db, client, mock_db, mock_task_service):
         """Test successful task retrieval."""
         mock_get_db.return_value = mock_db
         
-        with patch('api.routes.tasks.get_task_service', return_value=mock_task_service):
+        with patch('todorama.api.routes.tasks.get_task_service', return_value=mock_task_service):
             response = client.get("/tasks/1")
         
         assert response.status_code == 200
@@ -355,19 +355,19 @@ class TestGetTask:
         assert data["title"] == "Test Task"
         mock_task_service.get_task.assert_called_once_with(1)
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_get_task_not_found(self, mock_get_db, client, mock_db, mock_task_service):
         """Test task retrieval when task not found."""
         mock_get_db.return_value = mock_db
         mock_task_service.get_task.return_value = None
         
-        with patch('api.routes.tasks.get_task_service', return_value=mock_task_service):
+        with patch('todorama.api.routes.tasks.get_task_service', return_value=mock_task_service):
             response = client.get("/tasks/999")
         
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_get_task_invalid_id(self, mock_get_db, client, mock_db):
         """Test task retrieval with invalid task_id."""
         mock_get_db.return_value = mock_db
@@ -376,7 +376,7 @@ class TestGetTask:
         
         assert response.status_code == 422  # Validation error (gt=0 constraint)
     
-    @patch('api.routes.tasks.get_db')
+    @patch('todorama.api.routes.tasks.get_db')
     def test_get_task_non_numeric_id(self, mock_get_db, client, mock_db):
         """Test task retrieval with non-numeric task_id."""
         mock_get_db.return_value = mock_db

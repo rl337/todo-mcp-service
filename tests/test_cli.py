@@ -10,9 +10,9 @@ from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from src.cli import cli
+from todorama.cli import cli
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def mock_env(monkeypatch):
 
 def test_cli_list_tasks_no_auth(runner, mock_env):
     """Test listing tasks without authentication."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -57,7 +57,7 @@ def test_cli_list_tasks_no_auth(runner, mock_env):
 
 def test_cli_list_tasks_with_filters(runner, mock_env):
     """Test listing tasks with filters."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -82,7 +82,7 @@ def test_cli_list_tasks_with_filters(runner, mock_env):
 
 def test_cli_create_task(runner, mock_env):
     """Test creating a task."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 201
@@ -116,7 +116,7 @@ def test_cli_create_task(runner, mock_env):
 
 def test_cli_complete_task(runner, mock_env):
     """Test completing a task."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -144,7 +144,7 @@ def test_cli_complete_task(runner, mock_env):
 
 def test_cli_show_task(runner, mock_env):
     """Test showing task details."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -171,7 +171,7 @@ def test_cli_show_task(runner, mock_env):
 
 def test_cli_reserve_task(runner, mock_env):
     """Test reserving a task."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -198,7 +198,7 @@ def test_cli_reserve_task(runner, mock_env):
 
 def test_cli_unlock_task(runner, mock_env):
     """Test unlocking a task."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -225,7 +225,7 @@ def test_cli_unlock_task(runner, mock_env):
 
 def test_cli_with_api_key_flag(runner, mock_env):
     """Test CLI with API key passed as flag."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -248,7 +248,7 @@ def test_cli_with_api_key_flag(runner, mock_env):
 
 def test_cli_with_custom_url(runner, mock_env):
     """Test CLI with custom service URL."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -270,7 +270,7 @@ def test_cli_with_custom_url(runner, mock_env):
 
 def test_cli_error_handling(runner, mock_env):
     """Test CLI error handling."""
-    with patch('src.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.cli.httpx.Client') as mock_client_class:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 404

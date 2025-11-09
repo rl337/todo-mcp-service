@@ -10,9 +10,9 @@ from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from security_headers import SecurityHeadersMiddleware
+from todorama.security_headers import SecurityHeadersMiddleware
 
 
 @pytest.fixture

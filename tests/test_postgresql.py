@@ -13,9 +13,9 @@ import sqlite3
 from datetime import datetime, timedelta
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Package is now at top level, no sys.path.insert needed
 
-from database import TodoDatabase
+from todorama.database import TodoDatabase
 from db_adapter import get_database_adapter, PostgreSQLAdapter, SQLiteAdapter
 
 
