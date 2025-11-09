@@ -14,6 +14,8 @@ from fastapi import HTTPException
 
 from todorama.database import TodoDatabase
 from todorama.tracing import trace_span, add_span_attribute
+from todorama.services.project_service import ProjectService
+from todorama.models.project_models import ProjectCreate
 
 # Database instance (set by set_db)
 _db_instance: Optional[TodoDatabase] = None
@@ -1973,10 +1975,12 @@ class MCPTodoAPI:
         """
         with trace_span("mcp.list_projects"):
             try:
-                projects = get_db().list_projects()
+                db = get_db()
+                project_service = ProjectService(db)
+                projects = project_service.list_projects()
                 return {
                     "success": True,
-                    "projects": [dict(project) for project in projects],
+                    "projects": projects,
                     "count": len(projects)
                 }
             except Exception as e:
@@ -2000,7 +2004,9 @@ class MCPTodoAPI:
         """
         with trace_span("mcp.get_project", attributes={"mcp.project_id": project_id}):
             try:
-                project = get_db().get_project(project_id)
+                db = get_db()
+                project_service = ProjectService(db)
+                project = project_service.get_project(project_id)
                 if not project:
                     add_span_attribute("mcp.success", False)
                     add_span_attribute("mcp.error", "project_not_found")
@@ -2012,7 +2018,7 @@ class MCPTodoAPI:
                 add_span_attribute("mcp.success", True)
                 return {
                     "success": True,
-                    "project": dict(project)
+                    "project": project
                 }
             except Exception as e:
                 add_span_attribute("mcp.success", False)
@@ -2035,7 +2041,9 @@ class MCPTodoAPI:
         """
         with trace_span("mcp.get_project_by_name", attributes={"mcp.project_name": name}):
             try:
-                project = get_db().get_project_by_name(name.strip())
+                db = get_db()
+                project_service = ProjectService(db)
+                project = project_service.get_project_by_name(name)
                 if not project:
                     add_span_attribute("mcp.success", False)
                     add_span_attribute("mcp.error", "project_not_found")
@@ -2047,7 +2055,7 @@ class MCPTodoAPI:
                 add_span_attribute("mcp.success", True)
                 return {
                     "success": True,
-                    "project": dict(project)
+                    "project": project
                 }
             except Exception as e:
                 add_span_attribute("mcp.success", False)
@@ -2085,36 +2093,31 @@ class MCPTodoAPI:
             }
         ):
             try:
-                import sqlite3
-                project_id = get_db().create_project(
+                db = get_db()
+                project_service = ProjectService(db)
+                project_create = ProjectCreate(
                     name=name,
                     local_path=local_path,
                     origin_url=origin_url,
                     description=description
                 )
-                created_project = get_db().get_project(project_id)
-                if not created_project:
-                    add_span_attribute("mcp.success", False)
-                    add_span_attribute("mcp.error", "failed_to_retrieve")
-                    return {
-                        "success": False,
-                        "error": "Failed to retrieve created project"
-                    }
+                created_project = project_service.create_project(project_create)
                 
                 add_span_attribute("mcp.success", True)
-                add_span_attribute("mcp.project_id", project_id)
+                add_span_attribute("mcp.project_id", created_project.get("id"))
                 return {
                     "success": True,
-                    "project_id": project_id,
-                    "project": dict(created_project),
+                    "project_id": created_project.get("id"),
+                    "project": created_project,
                     "message": f"Project '{name}' created successfully"
                 }
-            except sqlite3.IntegrityError:
+            except ValueError as e:
+                # ValueError from service indicates duplicate name or validation error
                 add_span_attribute("mcp.success", False)
                 add_span_attribute("mcp.error", "duplicate_name")
                 return {
                     "success": False,
-                    "error": f"Project with name '{name}' already exists. Please use a different name."
+                    "error": str(e)
                 }
             except Exception as e:
                 add_span_attribute("mcp.success", False)

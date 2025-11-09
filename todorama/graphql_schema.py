@@ -6,6 +6,7 @@ from typing import Optional, List
 from datetime import datetime
 
 from todorama.mcp_api import get_db
+from todorama.services.project_service import ProjectService
 
 
 @strawberry.type
@@ -95,7 +96,8 @@ class Query:
     def project(self, id: int) -> Optional[Project]:
         """Get a project by ID."""
         db = get_db()
-        project = db.get_project(id)
+        project_service = ProjectService(db)
+        project = project_service.get_project(id)
         if not project:
             return None
         return Project(**project)
@@ -104,7 +106,8 @@ class Query:
     def projects(self, limit: int = 100) -> List[Project]:
         """List all projects."""
         db = get_db()
-        projects = db.list_projects()
+        project_service = ProjectService(db)
+        projects = project_service.list_projects()
         # Apply limit manually since list_projects doesn't take limit
         if len(projects) > limit:
             projects = projects[:limit]
