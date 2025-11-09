@@ -17,6 +17,7 @@ from todorama.dependencies.services import get_db
 from todorama.services.task_service import TaskService
 from todorama.services.project_service import ProjectService
 from todorama.services.tag_service import TagService
+from todorama.services.template_service import TemplateService
 
 # Initialize router
 router = APIRouter()
@@ -397,8 +398,9 @@ async def create_template(
 ) -> Dict[str, Any]:
     """Create a new task template."""
     db = get_db()
+    template_service = TemplateService(db)
     try:
-        template_id = db.create_template(
+        template = template_service.create_template(
             name=template_data["name"],
             task_type=template_data["task_type"],
             task_instruction=template_data["task_instruction"],
@@ -408,9 +410,6 @@ async def create_template(
             estimated_hours=template_data.get("estimated_hours"),
             notes=template_data.get("notes")
         )
-        template = db.get_template(template_id)
-        if not template:
-            raise HTTPException(status_code=500, detail="Failed to retrieve created template")
         return template
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Missing required field: {e}")
@@ -427,15 +426,20 @@ async def list_templates(
 ) -> List[Dict[str, Any]]:
     """List all templates, optionally filtered by task_type."""
     db = get_db()
-    templates = db.list_templates(task_type=task_type)
-    return templates
+    template_service = TemplateService(db)
+    try:
+        templates = template_service.list_templates(task_type=task_type)
+        return templates
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/templates/{template_id}")
 async def get_template(template_id: int = Path(..., gt=0)) -> Dict[str, Any]:
     """Get a template by ID."""
     db = get_db()
-    template = db.get_template(template_id)
+    template_service = TemplateService(db)
+    template = template_service.get_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail=f"Template {template_id} not found")
     return template
@@ -458,11 +462,7 @@ async def create_task_from_template(
 ) -> Dict[str, Any]:
     """Create a task from a template."""
     db = get_db()
-    
-    # Verify template exists
-    template = db.get_template(template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail=f"Template {template_id} not found")
+    template_service = TemplateService(db)
     
     # Get agent_id from auth or use default
     agent_id = auth.get("agent_id") if auth else "system"
@@ -473,42 +473,23 @@ async def create_task_from_template(
     
     # Create task from template with optional overrides
     try:
-        # Use title from task_data if provided, otherwise use template name
-        task_title = task_data.title if task_data.title else None
-        # Only use template name if title is explicitly None or empty string
-        if not task_title or (isinstance(task_title, str) and task_title.strip() == ""):
-            task_title = template["name"]
-        
-        # Parse due_date if provided
-        due_date_obj = None
-        if task_data.due_date:
-            from datetime import datetime
-            try:
-                if task_data.due_date.endswith('Z'):
-                    due_date_obj = datetime.fromisoformat(task_data.due_date.replace('Z', '+00:00'))
-                else:
-                    due_date_obj = datetime.fromisoformat(task_data.due_date)
-            except ValueError:
-                pass  # Invalid date format, ignore
-        
-        task_id = db.create_task_from_template(
+        task = template_service.create_task_from_template(
             template_id=template_id,
             agent_id=agent_id,
-            title=task_title,
+            title=task_data.title,
             project_id=task_data.project_id,
             notes=task_data.notes,
-            priority=task_data.priority or template.get("priority"),
-            estimated_hours=task_data.estimated_hours or template.get("estimated_hours"),
-            due_date=due_date_obj
+            priority=task_data.priority,
+            estimated_hours=task_data.estimated_hours,
+            due_date=task_data.due_date
         )
-        
-        # Get the created task
-        task = db.get_task(task_id)
-        if not task:
-            raise HTTPException(status_code=500, detail="Failed to retrieve created task")
         return task
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # Return 404 for "not found" errors, 400 for validation errors
+        error_msg = str(e)
+        if "not found" in error_msg.lower():
+            raise HTTPException(status_code=404, detail=error_msg)
+        raise HTTPException(status_code=400, detail=error_msg)
     except Exception as e:
         logger.error(f"Failed to create task from template: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create task from template")
