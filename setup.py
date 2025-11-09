@@ -4,7 +4,7 @@ Setup script for TODO MCP Service CLI.
 from setuptools import setup, find_packages
 
 setup(
-    name="todo-mcp-service",
+    name="todorama",
     version="0.1.0",
     packages=find_packages(),
     install_requires=[
@@ -13,8 +13,9 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "todo=src.cli:cli",
+            "todorama=todorama.__main__:main",
+            "todo=todorama.cli:cli",  # Backward compatibility
         ],
     },
-    python_requires=">=3.8",
+    python_requires=">=3.11",
 )

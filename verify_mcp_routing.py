@@ -7,7 +7,7 @@ import ast
 
 def extract_mcp_functions():
     """Extract function names from MCP_FUNCTIONS."""
-    with open('src/mcp_api.py', 'r') as f:
+    with open('todorama/mcp_api.py', 'r') as f:
         content = f.read()
     
     # Find MCP_FUNCTIONS = [
@@ -24,7 +24,7 @@ def extract_mcp_functions():
 
 def extract_handlers():
     """Extract tool_name handlers from main.py."""
-    with open('src/main.py', 'r') as f:
+    with open('todorama/main.py', 'r') as f:
         lines = f.readlines()
     
     # Find tools/call section
