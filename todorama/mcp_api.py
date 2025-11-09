@@ -3185,6 +3185,11 @@ def handle_jsonrpc_request(request: Dict[str, Any]) -> Dict[str, Any]:
                 task_type=arguments.get("task_type"),
                 start_date=arguments.get("start_date"),
                 end_date=arguments.get("end_date")
+            ),
+            "get_recent_completions": lambda: MCPTodoAPI.get_recent_completions(
+                limit=arguments.get("limit", 10),
+                project_id=arguments.get("project_id"),
+                hours=arguments.get("hours")
             )
         }
         

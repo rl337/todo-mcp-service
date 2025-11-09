@@ -67,7 +67,7 @@ def temp_db():
 def client(temp_db):
     """Create test client."""
     from todorama.app import create_app
-app = create_app()
+    app = create_app()
     return TestClient(app)
 
 
