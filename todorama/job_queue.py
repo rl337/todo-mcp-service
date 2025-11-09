@@ -21,6 +21,7 @@ except ImportError:
     redis = None
 
 from todorama.tracing import trace_span, add_span_attribute
+from todorama.adapters import HTTPClientAdapterFactory, HTTPStatusError, TimeoutException, NetworkError
 
 logger = logging.getLogger(__name__)
 
@@ -569,7 +570,7 @@ class WebhookJobProcessor(JobProcessor):
             headers["X-Webhook-Signature"] = f"sha256={signature}"
         
         try:
-            with httpx.Client(timeout=timeout) as client:
+            with HTTPClientAdapterFactory.create_client(timeout=timeout) as client:
                 response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 
@@ -579,13 +580,13 @@ class WebhookJobProcessor(JobProcessor):
                     "url": url,
                     "delivered_at": datetime.utcnow().isoformat()
                 }
-        except httpx.HTTPStatusError as e:
+        except HTTPStatusError as e:
             # 4xx errors are non-retryable, 5xx are retryable
             if 400 <= e.response.status_code < 500:
                 raise NonRetryableJobError(f"Webhook delivery failed: {e.response.status_code}")
             else:
                 raise RetryableJobError(f"Webhook delivery failed: {e.response.status_code}")
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
+        except (TimeoutException, NetworkError) as e:
             raise RetryableJobError(f"Webhook delivery network error: {e}")
         except Exception as e:
             logger.error(f"Webhook job failed: {job_id} - {e}", exc_info=True)

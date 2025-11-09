@@ -14,9 +14,9 @@ import secrets
 from typing import Optional, List, Dict, Any, Tuple, Union
 from datetime import datetime, timedelta
 import logging
-import httpx
 
 from todorama.db_adapter import get_database_adapter, DatabaseType
+from todorama.adapters import HTTPClientAdapterFactory, HTTPError, HTTPResponse
 
 logger = logging.getLogger(__name__)
 
@@ -642,7 +642,7 @@ class ConversationStorage:
                 "temperature": 0.3  # Lower temperature for more consistent summaries
             }
             
-            with httpx.Client(timeout=30.0) as client:
+            with HTTPClientAdapterFactory.create_client(timeout=30.0) as client:
                 response = client.post(
                     f"{self.llm_api_url.rstrip('/')}/v1/chat/completions",
                     headers=headers,
@@ -698,7 +698,7 @@ class ConversationStorage:
                 else:
                     raise ValueError("Invalid LLM API response format")
                     
-        except httpx.HTTPError as e:
+        except HTTPError as e:
             logger.error(f"HTTP error calling LLM API: {e}", exc_info=True)
             raise
         except Exception as e:
@@ -735,7 +735,7 @@ class ConversationStorage:
             
         Raises:
             ValueError: If LLM is not enabled or invalid configuration
-            httpx.HTTPError: If API request fails
+            HTTPError: If API request fails
         """
         if not self.llm_enabled:
             raise ValueError("LLM not configured. Set LLM_API_URL and LLM_API_KEY environment variables.")
@@ -820,17 +820,19 @@ class ConversationStorage:
         error_occurred = False
         
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with HTTPClientAdapterFactory.create_async_client(timeout=60.0) as client:
                 async with client.stream(
                     "POST",
                     f"{self.llm_api_url.rstrip('/')}/v1/chat/completions",
                     headers=headers,
                     json=payload
                 ) as response:
-                    response.raise_for_status()
+                    # Wrap response for consistent interface
+                    wrapped_response = HTTPResponse(response)
+                    wrapped_response.raise_for_status()
                     
                     # Parse Server-Sent Events
-                    async for line in response.aiter_lines():
+                    async for line in wrapped_response.aiter_lines():
                         if not line.strip():
                             continue
                         
@@ -871,7 +873,7 @@ class ConversationStorage:
                     
                 logger.debug("Finished streaming LLM response")
         
-        except httpx.HTTPError as e:
+        except HTTPError as e:
             error_occurred = True
             logger.error(f"HTTP error calling LLM API for streaming: {e}", exc_info=True)
             raise

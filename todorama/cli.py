@@ -6,8 +6,9 @@ import os
 import sys
 import json
 import click
-import httpx
 from typing import Optional, Dict, Any
+
+from todorama.adapters import HTTPClientAdapterFactory, HTTPResponse, HTTPStatusError
 
 
 def get_service_url() -> str:
@@ -26,7 +27,7 @@ def make_request(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     **kwargs
-) -> httpx.Response:
+) -> HTTPResponse:
     """Make HTTP request to TODO service."""
     base_url = base_url or get_service_url()
     url = f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
@@ -35,22 +36,24 @@ def make_request(
     if api_key:
         headers["X-API-Key"] = api_key
     
-    client = httpx.Client(timeout=30.0)
-    try:
-        if method.upper() == "GET":
-            response = client.get(url, headers=headers, **kwargs)
-        elif method.upper() == "POST":
-            response = client.post(url, headers=headers, **kwargs)
-        elif method.upper() == "PATCH":
-            response = client.patch(url, headers=headers, **kwargs)
-        elif method.upper() == "DELETE":
-            response = client.delete(url, headers=headers, **kwargs)
-        else:
-            raise ValueError(f"Unsupported method: {method}")
-        
-        return response
-    finally:
-        client.close()
+    with HTTPClientAdapterFactory.create_client(timeout=30.0) as client:
+        try:
+            if method.upper() == "GET":
+                response = client.get(url, headers=headers, **kwargs)
+            elif method.upper() == "POST":
+                response = client.post(url, headers=headers, **kwargs)
+            elif method.upper() == "PATCH":
+                response = client.patch(url, headers=headers, **kwargs)
+            elif method.upper() == "DELETE":
+                response = client.delete(url, headers=headers, **kwargs)
+            else:
+                raise ValueError(f"Unsupported method: {method}")
+            
+            return response
+        except HTTPStatusError as e:
+            error_data = e.response.json() if e.response.content else {}
+            click.echo(f"Error {e.response.status_code}: {error_data.get('detail', 'Unknown error')}", err=True)
+            sys.exit(1)
 
 
 def format_task(task: Dict[str, Any]) -> str:
@@ -143,7 +146,7 @@ def list(ctx, task_status, task_type, project_id, assigned_agent, priority, limi
                 click.echo(format_task(task))
                 click.echo()
     
-    except httpx.HTTPStatusError as e:
+    except HTTPStatusError as e:
         error_data = e.response.json() if e.response.content else {}
         click.echo(f"Error {e.response.status_code}: {error_data.get('detail', 'Unknown error')}", err=True)
         sys.exit(1)
@@ -200,7 +203,7 @@ def create(ctx, title, task_type, task_instruction, verification_instruction,
         click.echo(f"Task created successfully!")
         click.echo(format_task(task))
     
-    except httpx.HTTPStatusError as e:
+    except HTTPStatusError as e:
         error_data = e.response.json() if e.response.content else {}
         click.echo(f"Error {e.response.status_code}: {error_data.get('detail', 'Unknown error')}", err=True)
         sys.exit(1)
@@ -237,7 +240,7 @@ def complete(ctx, task_id, agent_id, notes, actual_hours):
         if notes:
             click.echo(f"Notes: {notes}")
     
-    except httpx.HTTPStatusError as e:
+    except HTTPStatusError as e:
         error_data = e.response.json() if e.response.content else {}
         click.echo(f"Error {e.response.status_code}: {error_data.get('detail', 'Unknown error')}", err=True)
         sys.exit(1)
@@ -274,7 +277,7 @@ def show(ctx, task_id, output_format):
             if task.get('verification_instruction'):
                 click.echo(f"\nVerification:\n{task['verification_instruction']}")
     
-    except httpx.HTTPStatusError as e:
+    except HTTPStatusError as e:
         error_data = e.response.json() if e.response.content else {}
         click.echo(f"Error {e.response.status_code}: {error_data.get('detail', 'Unknown error')}", err=True)
         sys.exit(1)
@@ -303,7 +306,7 @@ def reserve(ctx, task_id, agent_id):
         result = response.json()
         click.echo(f"Task {task_id} reserved for {agent_id}")
     
-    except httpx.HTTPStatusError as e:
+    except HTTPStatusError as e:
         error_data = e.response.json() if e.response.content else {}
         click.echo(f"Error {e.response.status_code}: {error_data.get('detail', 'Unknown error')}", err=True)
         sys.exit(1)
@@ -332,7 +335,7 @@ def unlock(ctx, task_id, agent_id):
         result = response.json()
         click.echo(f"Task {task_id} unlocked")
     
-    except httpx.HTTPStatusError as e:
+    except HTTPStatusError as e:
         error_data = e.response.json() if e.response.content else {}
         click.echo(f"Error {e.response.status_code}: {error_data.get('detail', 'Unknown error')}", err=True)
         sys.exit(1)
@@ -390,7 +393,7 @@ def export_conversation(ctx, user_id, chat_id, export_format, output_file, start
             else:
                 click.echo(response.text)
     
-    except httpx.HTTPStatusError as e:
+    except HTTPStatusError as e:
         error_data = e.response.json() if e.response.content else {}
         click.echo(f"Error {e.response.status_code}: {error_data.get('detail', 'Unknown error')}", err=True)
         sys.exit(1)

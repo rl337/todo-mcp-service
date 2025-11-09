@@ -131,7 +131,8 @@ class TaskWorker(NATSWorker):
                 ).hexdigest()
                 headers["X-Webhook-Signature"] = f"sha256={signature}"
             
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            from todorama.adapters import HTTPClientAdapterFactory
+            async with HTTPClientAdapterFactory.create_async_client(timeout=10.0) as client:
                 response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 

@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 # Third-party imports
 from todorama.adapters.http_framework import HTTPFrameworkAdapter
 from todorama.adapters.metrics import MetricsAdapter
-from strawberry.fastapi import GraphQLRouter
+from todorama.adapters import GraphQLAdapter
 
 # Internal imports
 from todorama.dependencies.services import ServiceContainer, get_services
@@ -133,8 +133,9 @@ setup_middleware(app)
 setup_exception_handlers(app)
 
 # Add GraphQL router
-graphql_app = GraphQLRouter(schema)
-app.include_router(graphql_app, prefix="/graphql")
+graphql_adapter = GraphQLAdapter()
+graphql_router = graphql_adapter.create_router(schema)
+app.include_router(graphql_router.router, prefix="/graphql")
 
 # Mount static files directory for web interface
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

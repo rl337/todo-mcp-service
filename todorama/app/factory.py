@@ -12,8 +12,8 @@ from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any
 
 from todorama.adapters.http_framework import HTTPFrameworkAdapter
-from prometheus_client import CONTENT_TYPE_LATEST
-from strawberry.fastapi import GraphQLRouter
+from todorama.adapters.metrics import MetricsAdapter
+from todorama.adapters import GraphQLAdapter
 
 # Import middleware and handlers
 from todorama.middleware.setup import setup_middleware
@@ -210,8 +210,9 @@ def create_app():
     app_adapter.include_router(mcp_router)
     
     # Add GraphQL router
-    graphql_app = GraphQLRouter(schema)
-    app.include_router(graphql_app, prefix="/graphql")
+    graphql_adapter = GraphQLAdapter()
+    graphql_router = graphql_adapter.create_router(schema)
+    app.include_router(graphql_router.router, prefix="/graphql")
     
     # Relationships endpoint
     @app_adapter.post("/relationships", status_code=201)
@@ -365,9 +366,10 @@ def create_app():
     @app_adapter.get("/metrics")
     async def metrics():
         """Prometheus metrics endpoint."""
+        metrics_adapter = MetricsAdapter()
         return Response(
             content=get_metrics(),
-            media_type=CONTENT_TYPE_LATEST
+            media_type=metrics_adapter.get_content_type()
         )
     
     # Additional exception handlers (beyond setup_exception_handlers)

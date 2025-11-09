@@ -11,7 +11,7 @@ from datetime import datetime
 import hmac
 import hashlib
 
-import httpx
+from todorama.adapters import HTTPClientAdapterFactory, TimeoutException, RequestError
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ async def send_webhook_notification(
     last_error = None
     for attempt in range(1, retry_count + 1):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with HTTPClientAdapterFactory.create_async_client(timeout=timeout) as client:
                 response = await client.post(url, content=payload_json, headers=headers)
                 
                 # Record delivery attempt
@@ -89,7 +89,7 @@ async def send_webhook_notification(
                     )
                     last_error = f"HTTP {response.status_code}"
                     
-        except httpx.TimeoutException:
+        except TimeoutException:
             logger.warning(f"Webhook {webhook_id} timed out (attempt {attempt}/{retry_count})")
             db.record_webhook_delivery(
                 webhook_id=webhook_id,
@@ -102,7 +102,7 @@ async def send_webhook_notification(
             )
             last_error = "Timeout"
             
-        except httpx.RequestError as e:
+        except RequestError as e:
             logger.warning(f"Webhook {webhook_id} request error: {str(e)} (attempt {attempt}/{retry_count})")
             db.record_webhook_delivery(
                 webhook_id=webhook_id,

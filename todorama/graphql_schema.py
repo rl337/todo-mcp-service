@@ -1,15 +1,22 @@
 """
 GraphQL schema for TODO Service.
 """
-import strawberry
 from typing import Optional, List
 from datetime import datetime
 
 from todorama.mcp_api import get_db
 from todorama.services.project_service import ProjectService
+from todorama.adapters import GraphQLAdapter
+
+# Initialize GraphQL adapter
+graphql_adapter = GraphQLAdapter()
+type = graphql_adapter.type
+input = graphql_adapter.input
+field = graphql_adapter.field
+Schema = graphql_adapter.Schema
 
 
-@strawberry.type
+@type
 class Project:
     """Project GraphQL type."""
     id: int
@@ -21,7 +28,7 @@ class Project:
     updated_at: str
 
 
-@strawberry.type
+@type
 class Task:
     """Task GraphQL type."""
     id: int
@@ -45,7 +52,7 @@ class Task:
     started_at: Optional[str]
 
 
-@strawberry.type
+@type
 class Relationship:
     """Task relationship GraphQL type."""
     id: int
@@ -55,7 +62,7 @@ class Relationship:
     created_at: str
 
 
-@strawberry.input
+@input
 class TaskFilter:
     """Filter input for task queries."""
     task_type: Optional[str] = None
@@ -67,32 +74,32 @@ class TaskFilter:
     tag_ids: Optional[List[int]] = None
 
 
-@strawberry.input
+@input
 class TaskOrderBy:
     """Ordering input for task queries."""
     field: str = "created_at"  # created_at, priority
     direction: str = "DESC"  # ASC, DESC
 
 
-@strawberry.type
+@type
 class PageInfo:
     """Pagination info."""
     limit: int
     has_more: bool
 
 
-@strawberry.type
+@type
 class TasksConnection:
     """Paginated tasks connection."""
     tasks: List[Task]
     page_info: PageInfo
 
 
-@strawberry.type
+@type
 class Query:
     """GraphQL Query root."""
     
-    @strawberry.field
+    @field
     def project(self, id: int) -> Optional[Project]:
         """Get a project by ID."""
         db = get_db()
@@ -102,7 +109,7 @@ class Query:
             return None
         return Project(**project)
     
-    @strawberry.field
+    @field
     def projects(self, limit: int = 100) -> List[Project]:
         """List all projects."""
         db = get_db()
@@ -113,7 +120,7 @@ class Query:
             projects = projects[:limit]
         return [Project(**project) for project in projects]
     
-    @strawberry.field
+    @field
     def task(self, id: int) -> Optional[Task]:
         """Get a task by ID."""
         db = get_db()
@@ -131,7 +138,7 @@ class Query:
         filtered_task = {k: v for k, v in task.items() if k in task_fields}
         return Task(**filtered_task)
     
-    @strawberry.field
+    @field
     def tasks(
         self,
         filter: Optional[TaskFilter] = None,
@@ -217,7 +224,7 @@ class Query:
             )
         )
     
-    @strawberry.field
+    @field
     def relationships(self, task_id: int) -> List[Relationship]:
         """Get relationships for a task."""
         db = get_db()
@@ -242,4 +249,4 @@ class Query:
 
 
 # Create GraphQL schema
-schema = strawberry.Schema(query=Query)
+schema = Schema(query=Query).schema

@@ -30,7 +30,7 @@ def mock_env(monkeypatch):
 
 def test_cli_list_tasks_no_auth(runner, mock_env):
     """Test listing tasks without authentication."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -45,7 +45,7 @@ def test_cli_list_tasks_no_auth(runner, mock_env):
         mock_client.get.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, ["list"])
         assert result.exit_code == 0
@@ -57,7 +57,7 @@ def test_cli_list_tasks_no_auth(runner, mock_env):
 
 def test_cli_list_tasks_with_filters(runner, mock_env):
     """Test listing tasks with filters."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -65,7 +65,7 @@ def test_cli_list_tasks_with_filters(runner, mock_env):
         mock_client.get.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, [
             "list",
@@ -82,7 +82,7 @@ def test_cli_list_tasks_with_filters(runner, mock_env):
 
 def test_cli_create_task(runner, mock_env):
     """Test creating a task."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 201
@@ -95,7 +95,7 @@ def test_cli_create_task(runner, mock_env):
         mock_client.post.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, [
             "create",
@@ -116,7 +116,7 @@ def test_cli_create_task(runner, mock_env):
 
 def test_cli_complete_task(runner, mock_env):
     """Test completing a task."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -127,7 +127,7 @@ def test_cli_complete_task(runner, mock_env):
         mock_client.post.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, [
             "complete",
@@ -144,7 +144,7 @@ def test_cli_complete_task(runner, mock_env):
 
 def test_cli_show_task(runner, mock_env):
     """Test showing task details."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -159,7 +159,7 @@ def test_cli_show_task(runner, mock_env):
         mock_client.get.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, ["show", "--task-id", "123"])
         assert result.exit_code == 0
@@ -171,7 +171,7 @@ def test_cli_show_task(runner, mock_env):
 
 def test_cli_reserve_task(runner, mock_env):
     """Test reserving a task."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -183,7 +183,7 @@ def test_cli_reserve_task(runner, mock_env):
         mock_client.post.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, [
             "reserve",
@@ -198,7 +198,7 @@ def test_cli_reserve_task(runner, mock_env):
 
 def test_cli_unlock_task(runner, mock_env):
     """Test unlocking a task."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -210,7 +210,7 @@ def test_cli_unlock_task(runner, mock_env):
         mock_client.post.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, [
             "unlock",
@@ -225,7 +225,7 @@ def test_cli_unlock_task(runner, mock_env):
 
 def test_cli_with_api_key_flag(runner, mock_env):
     """Test CLI with API key passed as flag."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -233,7 +233,7 @@ def test_cli_with_api_key_flag(runner, mock_env):
         mock_client.get.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, [
             "--api-key", "custom-key",
@@ -248,7 +248,7 @@ def test_cli_with_api_key_flag(runner, mock_env):
 
 def test_cli_with_custom_url(runner, mock_env):
     """Test CLI with custom service URL."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -256,7 +256,7 @@ def test_cli_with_custom_url(runner, mock_env):
         mock_client.get.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, [
             "--url", "http://custom:9000",
@@ -270,7 +270,7 @@ def test_cli_with_custom_url(runner, mock_env):
 
 def test_cli_error_handling(runner, mock_env):
     """Test CLI error handling."""
-    with patch('todorama.cli.httpx.Client') as mock_client_class:
+    with patch('todorama.adapters.http_client.HTTPClientAdapterFactory.create_client') as mock_factory:
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 404
@@ -281,8 +281,12 @@ def test_cli_error_handling(runner, mock_env):
         mock_response.content = b'{"error": "Not Found", "detail": "Task not found"}'
         
         # Make raise_for_status raise an HTTPStatusError when called
-        from httpx import HTTPStatusError
+        from todorama.adapters import HTTPStatusError
         def raise_error():
+            mock_error_response = MagicMock()
+            mock_error_response.status_code = 404
+            mock_error_response.content = b'{"detail": "Not Found"}'
+            mock_error_response.json.return_value = {"detail": "Not Found"}
             raise HTTPStatusError(
                 "Not Found", 
                 request=MagicMock(), 
@@ -293,7 +297,7 @@ def test_cli_error_handling(runner, mock_env):
         mock_client.get.return_value = mock_response
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_factory.return_value = mock_client
         
         result = runner.invoke(cli, ["show", "--task-id", "999"])
         assert result.exit_code != 0
