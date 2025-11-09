@@ -1870,7 +1870,10 @@ def test_mcp_search_tasks_ranks_by_relevance(auth_client):
     })
     assert response.status_code == 200
     result = response.json()
-    tasks = result["tasks"]
+    all_tasks = result["tasks"]
+    # Filter to only our test tasks (test isolation)
+    our_task_ids = {task1_id, task2_id, task3_id}
+    tasks = [t for t in all_tasks if t["id"] in our_task_ids]
     assert len(tasks) >= 2  # Should find task1 and task3
     # First result should be task1 (most relevant)
     assert tasks[0]["id"] == task1_id

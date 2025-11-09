@@ -10,6 +10,7 @@ from datetime import datetime, UTC
 from todorama.api.entities.base_entity import BaseEntity
 from todorama.models.task_models import TaskCreate, TaskUpdate, TaskResponse
 from todorama.services.task_service import TaskService
+from todorama.services.import_service import ImportService
 
 
 class TaskEntity(BaseEntity):
@@ -19,6 +20,7 @@ class TaskEntity(BaseEntity):
         """Initialize task entity."""
         super().__init__(db, auth_info)
         self.service = TaskService(db)
+        self.import_service = ImportService(db)
     
     def create(self, **kwargs) -> Dict[str, Any]:
         """
@@ -606,103 +608,13 @@ class TaskEntity(BaseEntity):
             project_id = kwargs.get("project_id")
             handle_duplicates = kwargs.get("handle_duplicates", "error")  # "skip" or "error"
             
-            imported = []
-            skipped = []
-            errors = []
-            import_id_map = {}  # Map import_id to task_id for relationship creation
-            seen_titles = set()  # Track titles seen in this import batch
-            
-            for task_data in tasks:
-                try:
-                    title = task_data.get("title", "").strip()
-                    
-                    # Check for duplicates if handle_duplicates is "skip"
-                    if handle_duplicates == "skip":
-                        # First check within the import batch
-                        if title in seen_titles:
-                            skipped.append({"title": title, "reason": "duplicate in batch"})
-                            continue
-                        
-                        # Then check against existing tasks in database
-                        if title:
-                            existing = self.db.query_tasks(
-                                search=title,
-                                project_id=project_id or task_data.get("project_id"),
-                                limit=10
-                            )
-                            # Filter to exact title match
-                            exact_match = [t for t in existing if t.get("title", "").strip() == title]
-                            if exact_match:
-                                skipped.append({"title": title, "reason": "duplicate"})
-                                continue
-                        
-                        # Mark this title as seen
-                        seen_titles.add(title)
-                    
-                    # Parse due_date if provided
-                    due_date_obj = None
-                    if task_data.get("due_date"):
-                        from datetime import datetime
-                        try:
-                            due_date_str = task_data["due_date"]
-                            if due_date_str.endswith('Z'):
-                                due_date_obj = datetime.fromisoformat(due_date_str.replace('Z', '+00:00'))
-                            else:
-                                due_date_obj = datetime.fromisoformat(due_date_str)
-                        except (ValueError, AttributeError):
-                            pass
-                    
-                    task_id = self.db.create_task(
-                        title=task_data["title"],
-                        task_type=task_data["task_type"],
-                        task_instruction=task_data["task_instruction"],
-                        verification_instruction=task_data["verification_instruction"],
-                        agent_id=agent_id,
-                        project_id=project_id or task_data.get("project_id"),
-                        priority=task_data.get("priority"),
-                        estimated_hours=task_data.get("estimated_hours"),
-                        notes=task_data.get("notes"),
-                        due_date=due_date_obj
-                    )
-                    imported.append(task_id)
-                    
-                    # Store import_id mapping for relationship creation
-                    if task_data.get("import_id"):
-                        import_id_map[task_data["import_id"]] = task_id
-                        
-                except Exception as e:
-                    errors.append({"task": task_data.get("title", "Unknown"), "error": str(e)})
-            
-            # Create relationships if import_id and parent_import_id are provided
-            for task_data in tasks:
-                if task_data.get("parent_import_id") and task_data.get("import_id"):
-                    parent_id = import_id_map.get(task_data["parent_import_id"])
-                    child_id = import_id_map.get(task_data["import_id"])
-                    relationship_type = task_data.get("relationship_type", "subtask")
-                    
-                    if parent_id and child_id:
-                        try:
-                            self.db.create_relationship(
-                                parent_task_id=parent_id,
-                                child_task_id=child_id,
-                                relationship_type=relationship_type,
-                                agent_id=agent_id
-                            )
-                        except Exception as e:
-                            # Relationship creation failed, but task was created
-                            errors.append({"relationship": f"{parent_id}->{child_id}", "error": str(e)})
-            
-            return {
-                "success": True,
-                "created": len(imported),
-                "skipped": len(skipped),
-                "error_count": len(errors),
-                "imported_count": len(imported),
-                "task_ids": imported,  # Alias for imported_task_ids
-                "imported_task_ids": imported,
-                "skipped_tasks": skipped,
-                "errors": errors
-            }
+            # Use ImportService for business logic
+            return self.import_service.import_json(
+                tasks=tasks,
+                agent_id=agent_id,
+                project_id=project_id,
+                handle_duplicates=handle_duplicates
+            )
         except Exception as e:
             self._handle_error(e, "Failed to import tasks from JSON")
     
@@ -713,23 +625,17 @@ class TaskEntity(BaseEntity):
         POST /api/Task/import/csv
         Body: CSV content as text, with optional field_mapping and handle_duplicates
         """
-        import csv
-        import io
         import json
-        from datetime import datetime
         
         try:
             # CSV content should be in kwargs as "content" or "csv_data"
             csv_content = kwargs.get("content") or kwargs.get("csv_data") or ""
-            csv_file = io.StringIO(csv_content)
-            reader = csv.DictReader(csv_file)
-            
             agent_id = kwargs.get("agent_id") or (self.auth_info.get("agent_id") if self.auth_info else "system")
             project_id = kwargs.get("project_id")
             handle_duplicates = kwargs.get("handle_duplicates", "error")  # "skip" or "error"
             
             # Parse field mapping if provided
-            field_mapping = {}
+            field_mapping = None
             if kwargs.get("field_mapping"):
                 try:
                     if isinstance(kwargs["field_mapping"], str):
@@ -739,102 +645,14 @@ class TaskEntity(BaseEntity):
                 except (json.JSONDecodeError, TypeError):
                     pass
             
-            imported = []
-            skipped = []
-            errors = []
-            
-            for row in reader:
-                try:
-                    # Apply field mapping if provided
-                    mapped_row = {}
-                    if field_mapping:
-                        for target_field, source_field in field_mapping.items():
-                            mapped_row[target_field] = row.get(source_field, "")
-                        # Copy unmapped fields as-is
-                        for key, value in row.items():
-                            if key not in field_mapping.values():
-                                mapped_row[key] = value
-                    else:
-                        mapped_row = row
-                    
-                    title = mapped_row.get("title", "").strip()
-                    task_type = mapped_row.get("task_type", "concrete")
-                    task_instruction = mapped_row.get("task_instruction", "")
-                    verification_instruction = mapped_row.get("verification_instruction", "")
-                    
-                    # Validate required fields
-                    if not title:
-                        errors.append({"row": "Unknown", "error": "Missing required field: title"})
-                        continue
-                    if not task_instruction:
-                        errors.append({"row": title, "error": "Missing required field: task_instruction"})
-                        continue
-                    if not verification_instruction:
-                        errors.append({"row": title, "error": "Missing required field: verification_instruction"})
-                        continue
-                    
-                    # Check for duplicates if handle_duplicates is "skip"
-                    if handle_duplicates == "skip" and title:
-                        existing = self.db.query_tasks(
-                            search=title,
-                            project_id=project_id or (int(mapped_row["project_id"]) if mapped_row.get("project_id") else None),
-                            limit=10
-                        )
-                        # Filter to exact title match
-                        exact_match = [t for t in existing if t.get("title", "").strip() == title]
-                        if exact_match:
-                            skipped.append({"title": title, "reason": "duplicate"})
-                            continue
-                    
-                    # Parse optional fields
-                    parsed_project_id = project_id
-                    if not parsed_project_id and mapped_row.get("project_id"):
-                        try:
-                            parsed_project_id = int(mapped_row["project_id"])
-                        except (ValueError, TypeError):
-                            pass
-                    
-                    parsed_estimated_hours = None
-                    if mapped_row.get("estimated_hours"):
-                        try:
-                            parsed_estimated_hours = float(mapped_row["estimated_hours"])
-                        except (ValueError, TypeError):
-                            pass
-                    
-                    parsed_due_date = None
-                    if mapped_row.get("due_date"):
-                        try:
-                            parsed_due_date = datetime.fromisoformat(mapped_row["due_date"])
-                        except (ValueError, AttributeError):
-                            pass
-                    
-                    task_id = self.db.create_task(
-                        title=title,
-                        task_type=task_type,
-                        task_instruction=task_instruction,
-                        verification_instruction=verification_instruction,
-                        agent_id=agent_id,
-                        project_id=parsed_project_id,
-                        priority=mapped_row.get("priority"),
-                        estimated_hours=parsed_estimated_hours,
-                        notes=mapped_row.get("notes"),
-                        due_date=parsed_due_date
-                    )
-                    imported.append(task_id)
-                except Exception as e:
-                    errors.append({"row": row.get("title", "Unknown"), "error": str(e)})
-            
-            return {
-                "success": True,
-                "created": len(imported),
-                "skipped": len(skipped),
-                "error_count": len(errors),
-                "imported_count": len(imported),
-                "task_ids": imported,  # Add task_ids alias for consistency
-                "imported_task_ids": imported,
-                "skipped_tasks": skipped,
-                "errors": errors
-            }
+            # Use ImportService for business logic
+            return self.import_service.import_csv(
+                csv_content=csv_content,
+                agent_id=agent_id,
+                project_id=project_id,
+                handle_duplicates=handle_duplicates,
+                field_mapping=field_mapping
+            )
         except Exception as e:
             self._handle_error(e, "Failed to import tasks from CSV")
     
