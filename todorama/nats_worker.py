@@ -7,6 +7,7 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional, Callable
 from todorama.nats_queue import NATSQueue, NATSWorker, MessageType, nullcontext
+from todorama.config import get_database_path
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ class TaskWorker(NATSWorker):
         logger.info("Processing backup job")
         
         try:
-            db_path = os.getenv("TODO_DB_PATH", "/app/data/todos.db")
+            db_path = get_database_path()
             backups_dir = os.getenv("TODO_BACKUPS_DIR", "/app/backups")
             backup_manager = BackupManager(db_path, backups_dir)
             backup_file = backup_manager.create_backup()

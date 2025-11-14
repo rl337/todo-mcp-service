@@ -149,6 +149,8 @@ function applyFilters() {
     const priorityFilter = Array.from(document.getElementById('priorityFilter').selectedOptions).map(o => o.value);
     const agentFilter = document.getElementById('agentFilter').value.toLowerCase();
     const projectFilter = document.getElementById('projectFilter').value;
+    const organizationFilter = document.getElementById('organizationFilter')?.value;
+    const currentOrgId = getCurrentOrganizationId ? getCurrentOrganizationId() : null;
     const createdFrom = document.getElementById('createdDateFrom').value;
     const createdTo = document.getElementById('createdDateTo').value;
 
@@ -185,6 +187,12 @@ function applyFilters() {
             return false;
         }
 
+        // Organization filter (from input or current organization context)
+        const orgFilterValue = organizationFilter ? parseInt(organizationFilter) : (currentOrgId || null);
+        if (orgFilterValue && task.organization_id !== orgFilterValue) {
+            return false;
+        }
+
         // Date filters
         if (createdFrom) {
             const taskCreated = new Date(task.created_at);
@@ -214,6 +222,8 @@ function clearFilters() {
     document.getElementById('priorityFilter').selectedIndex = -1;
     document.getElementById('agentFilter').value = '';
     document.getElementById('projectFilter').value = '';
+    const orgFilter = document.getElementById('organizationFilter');
+    if (orgFilter) orgFilter.value = '';
     document.getElementById('createdDateFrom').value = '';
     document.getElementById('createdDateTo').value = '';
     applyFilters();

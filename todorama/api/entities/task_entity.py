@@ -3,11 +3,17 @@ Task entity with command pattern methods.
 All task operations are exposed as methods that can be called via /api/Task/<method>
 """
 from typing import Dict, Any, List, Optional
-from pydantic import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 from datetime import datetime, UTC
 
 from todorama.adapters.http_framework import HTTPFrameworkAdapter
 from todorama.api.entities.base_entity import BaseEntity
+from todorama.exceptions import (
+    TaskNotFoundError,
+    ValidationError,
+    DuplicateError,
+    to_http_exception
+)
 
 # Initialize adapter
 http_adapter = HTTPFrameworkAdapter()
@@ -43,8 +49,8 @@ class TaskEntity(BaseEntity):
             # Convert dict to TaskCreate model - catch validation errors
             try:
                 task_create = TaskCreate(**task_data)
-            except ValidationError as e:
-                # Convert Pydantic validation errors to 422 HTTPException
+            except PydanticValidationError as e:
+                # Convert Pydantic validation errors to standard ValidationError
                 # Format errors in FastAPI style
                 errors = []
                 for error in e.errors():
@@ -53,14 +59,15 @@ class TaskEntity(BaseEntity):
                         "msg": error["msg"],
                         "type": error["type"]
                     })
-                raise HTTPException(
-                    status_code=422,
-                    detail=errors  # FastAPI format: list of error objects
+                # Raise standard ValidationError - handler will convert to HTTPException
+                raise ValidationError(
+                    message="Validation failed",
+                    context={"errors": errors}
                 )
             
             created_task = self.service.create_task(task_create, self.auth_info)
             return created_task
-        except HTTPException:
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to create task")
@@ -76,22 +83,24 @@ class TaskEntity(BaseEntity):
             try:
                 task_id = int(task_id)
             except (ValueError, TypeError):
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"task_id must be an integer, got {task_id}"
+                raise ValidationError(
+                    message=f"task_id must be an integer, got {task_id}",
+                    field="task_id",
+                    value=task_id
                 )
             
             # Validate task_id is positive
             if task_id <= 0:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"task_id must be a positive integer, got {task_id}"
+                raise ValidationError(
+                    message=f"task_id must be a positive integer, got {task_id}",
+                    field="task_id",
+                    value=task_id
                 )
             task = self.service.get_task(task_id)
             if not task:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+                raise TaskNotFoundError(task_id)
             return task
-        except HTTPException:
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to get task")
@@ -107,26 +116,28 @@ class TaskEntity(BaseEntity):
             try:
                 task_id = int(task_id)
             except (ValueError, TypeError):
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"task_id must be an integer, got {task_id}"
+                raise ValidationError(
+                    message=f"task_id must be an integer, got {task_id}",
+                    field="task_id",
+                    value=task_id
                 )
             
             if task_id <= 0:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"task_id must be a positive integer, got {task_id}"
+                raise ValidationError(
+                    message=f"task_id must be a positive integer, got {task_id}",
+                    field="task_id",
+                    value=task_id
                 )
             
             # Verify task exists
             task = self.db.get_task(task_id)
             if not task:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+                raise TaskNotFoundError(task_id)
             
             # Get relationships
             relationships = self.db.get_related_tasks(task_id)
             return {"relationships": relationships}
-        except HTTPException:
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to get task relationships")
@@ -148,27 +159,31 @@ class TaskEntity(BaseEntity):
             valid_order_by = ["priority", "priority_asc"]
             
             if filters.get("task_type") and filters["task_type"] not in valid_task_types:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid task_type '{filters['task_type']}'. Must be one of: {', '.join(valid_task_types)}"
+                raise ValidationError(
+                    message=f"Invalid task_type '{filters['task_type']}'. Must be one of: {', '.join(valid_task_types)}",
+                    field="task_type",
+                    value=filters["task_type"]
                 )
             
             if filters.get("task_status") and filters["task_status"] not in valid_task_statuses:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid task_status '{filters['task_status']}'. Must be one of: {', '.join(valid_task_statuses)}"
+                raise ValidationError(
+                    message=f"Invalid task_status '{filters['task_status']}'. Must be one of: {', '.join(valid_task_statuses)}",
+                    field="task_status",
+                    value=filters["task_status"]
                 )
             
             if filters.get("priority") and filters["priority"] not in valid_priorities:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid priority '{filters['priority']}'. Must be one of: {', '.join(valid_priorities)}"
+                raise ValidationError(
+                    message=f"Invalid priority '{filters['priority']}'. Must be one of: {', '.join(valid_priorities)}",
+                    field="priority",
+                    value=filters["priority"]
                 )
             
             if filters.get("order_by") and filters["order_by"] not in valid_order_by:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid order_by '{filters['order_by']}'. Must be one of: {', '.join(valid_order_by)}"
+                raise ValidationError(
+                    message=f"Invalid order_by '{filters['order_by']}'. Must be one of: {', '.join(valid_order_by)}",
+                    field="order_by",
+                    value=filters["order_by"]
                 )
             
             # Validate numeric values (must be positive)
@@ -177,15 +192,17 @@ class TaskEntity(BaseEntity):
                 try:
                     project_id = int(project_id)
                     if project_id <= 0:
-                        raise HTTPException(
-                            status_code=422,
-                            detail=f"project_id must be a positive integer, got {project_id}"
+                        raise ValidationError(
+                            message=f"project_id must be a positive integer, got {project_id}",
+                            field="project_id",
+                            value=project_id
                         )
                     filters["project_id"] = project_id
                 except (ValueError, TypeError):
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"project_id must be an integer, got {project_id}"
+                    raise ValidationError(
+                        message=f"project_id must be an integer, got {project_id}",
+                        field="project_id",
+                        value=project_id
                     )
             
             if filters.get("tag_id") is not None:
@@ -193,15 +210,17 @@ class TaskEntity(BaseEntity):
                 try:
                     tag_id = int(tag_id)
                     if tag_id <= 0:
-                        raise HTTPException(
-                            status_code=422,
-                            detail=f"tag_id must be a positive integer, got {tag_id}"
+                        raise ValidationError(
+                            message=f"tag_id must be a positive integer, got {tag_id}",
+                            field="tag_id",
+                            value=tag_id
                         )
                     filters["tag_id"] = tag_id
                 except (ValueError, TypeError):
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"tag_id must be an integer, got {tag_id}"
+                    raise ValidationError(
+                        message=f"tag_id must be an integer, got {tag_id}",
+                        field="tag_id",
+                        value=tag_id
                     )
             
             # Validate tag_ids format (comma-separated integers)
@@ -212,15 +231,17 @@ class TaskEntity(BaseEntity):
                         tag_ids_list = [int(tid.strip()) for tid in tag_ids_str.split(",") if tid.strip()]
                         for tid in tag_ids_list:
                             if tid <= 0:
-                                raise HTTPException(
-                                    status_code=400,
-                                    detail=f"Invalid tag_id '{tid}' in tag_ids. All tag IDs must be positive integers"
+                                raise ValidationError(
+                                    message=f"Invalid tag_id '{tid}' in tag_ids. All tag IDs must be positive integers",
+                                    field="tag_ids",
+                                    value=tid
                                 )
                         filters["tag_ids"] = tag_ids_list
                     except ValueError as e:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Invalid tag_ids format '{tag_ids_str}'. Must be comma-separated positive integers (e.g., '1,2,3'). Error: {str(e)}"
+                        raise ValidationError(
+                            message=f"Invalid tag_ids format '{tag_ids_str}'. Must be comma-separated positive integers (e.g., '1,2,3'). Error: {str(e)}",
+                            field="tag_ids",
+                            value=tag_ids_str
                         )
             
             tasks = self.db.query_tasks(
@@ -236,7 +257,7 @@ class TaskEntity(BaseEntity):
                 tag_ids=filters.get("tag_ids")
             )
             return [dict(task) for task in tasks]
-        except HTTPException:
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to list tasks")
@@ -252,8 +273,8 @@ class TaskEntity(BaseEntity):
             # Validate update data using TaskUpdate model
             try:
                 task_update = TaskUpdate(**update_data)
-            except ValidationError as e:
-                # Convert Pydantic validation errors to 422 HTTPException
+            except PydanticValidationError as e:
+                # Convert Pydantic validation errors to standard ValidationError
                 errors = []
                 for error in e.errors():
                     errors.append({
@@ -261,15 +282,15 @@ class TaskEntity(BaseEntity):
                         "msg": error["msg"],
                         "type": error["type"]
                     })
-                raise HTTPException(
-                    status_code=422,
-                    detail=errors  # FastAPI format: list of error objects
+                raise ValidationError(
+                    message="Validation failed",
+                    context={"errors": errors}
                 )
             
             # Check if task exists
             task = self.db.get_task(task_id)
             if not task:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+                raise TaskNotFoundError(task_id)
             
             # Update task fields in database
             conn = self.db._get_connection()
@@ -309,7 +330,7 @@ class TaskEntity(BaseEntity):
                 return dict(updated_task)
             finally:
                 self.db.adapter.close(conn)
-        except HTTPException:
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to update task")
@@ -324,7 +345,7 @@ class TaskEntity(BaseEntity):
         try:
             task = self.db.get_task(task_id)
             if not task:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+                raise TaskNotFoundError(task_id)
             
             # Delete via database (if method exists, otherwise mark as cancelled)
             if hasattr(self.db, 'delete_task'):
@@ -346,26 +367,28 @@ class TaskEntity(BaseEntity):
         try:
             # Validate agent_id is not empty or whitespace
             if not agent_id or not agent_id.strip():
-                raise HTTPException(
-                    status_code=422,
-                    detail=[{
-                        "loc": ["body", "agent_id"],
-                        "msg": "agent_id cannot be empty or whitespace",
-                        "type": "value_error"
-                    }]
+                raise ValidationError(
+                    message="agent_id cannot be empty or whitespace",
+                    field="agent_id",
+                    value=agent_id
                 )
             
             # Check if task exists first
             task = self.db.get_task(task_id)
             if not task:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+                raise TaskNotFoundError(task_id)
             
             success = self.db.lock_task(task_id, agent_id.strip())
             if not success:
-                raise HTTPException(status_code=409, detail="Task is already locked")
+                raise DuplicateError(
+                    resource_type="Task",
+                    field="status",
+                    value="locked",
+                    message="Task is already locked"
+                )
             task = self.db.get_task(task_id)
             return dict(task)
-        except HTTPException:
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to lock task")
@@ -395,19 +418,16 @@ class TaskEntity(BaseEntity):
             # Validate actual_hours if provided (must be positive)
             if actual_hours is not None:
                 if actual_hours <= 0:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=[{
-                            "loc": ["body", "actual_hours"],
-                            "msg": "actual_hours must be a positive number",
-                            "type": "value_error"
-                        }]
+                    raise ValidationError(
+                        message="actual_hours must be a positive number",
+                        field="actual_hours",
+                        value=actual_hours
                     )
             
             self.db.complete_task(task_id, agent_id, actual_hours=actual_hours, notes=notes)
             task = self.db.get_task(task_id)
             return dict(task)
-        except HTTPException:
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to complete task")
@@ -468,8 +488,12 @@ class TaskEntity(BaseEntity):
                     headers={"Content-Disposition": "attachment; filename=tasks.csv"}
                 )
             else:
-                raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
-        except HTTPException:
+                raise ValidationError(
+                    message=f"Unsupported format: {format}",
+                    field="format",
+                    value=format
+                )
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to export tasks")
@@ -526,9 +550,10 @@ class TaskEntity(BaseEntity):
                     else:
                         datetime.fromisoformat(start_date)
                 except ValueError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Invalid start_date format '{start_date}'. Must be ISO 8601 format."
+                    raise ValidationError(
+                        message=f"Invalid start_date format '{start_date}'. Must be ISO 8601 format.",
+                        field="start_date",
+                        value=start_date
                     )
             
             if end_date:
@@ -538,9 +563,10 @@ class TaskEntity(BaseEntity):
                     else:
                         datetime.fromisoformat(end_date)
                 except ValueError:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Invalid end_date format '{end_date}'. Must be ISO 8601 format."
+                    raise ValidationError(
+                        message=f"Invalid end_date format '{end_date}'. Must be ISO 8601 format.",
+                        field="end_date",
+                        value=end_date
                     )
             
             feed = self.db.get_activity_feed(
@@ -561,7 +587,7 @@ class TaskEntity(BaseEntity):
                     "limit": limit
                 }
             }
-        except HTTPException:
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to get activity feed")
@@ -718,10 +744,14 @@ class TaskEntity(BaseEntity):
             agent_id = kwargs.get("agent_id") or (self.auth_info.get("agent_id") if self.auth_info else "system")
             confirmation = kwargs.get("confirmation", False)
             if not confirmation:
-                raise HTTPException(status_code=400, detail="Confirmation required for bulk delete")
+                raise ValidationError(
+                    message="Confirmation required for bulk delete",
+                    field="confirmation",
+                    value=confirmation
+                )
             result = self.db.bulk_delete_tasks(task_ids, agent_id)
             return result
-        except HTTPException:
+        except (HTTPException, TaskNotFoundError, ValidationError, DuplicateError):
             raise
         except Exception as e:
             self._handle_error(e, "Failed to bulk delete tasks")

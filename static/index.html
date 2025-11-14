@@ -9,10 +9,23 @@
 <body>
     <div class="container">
         <header>
-            <h1>TODO Task Management</h1>
+            <div>
+                <h1>TODO Task Management</h1>
+                <div id="orgContext" style="margin-top: 5px; font-size: 14px; color: #666;">
+                    <!-- Organization context will be shown here -->
+                </div>
+            </div>
             <div class="header-actions">
-                <button id="refreshBtn" class="btn btn-secondary">Refresh</button>
-                <button id="createTaskBtn" class="btn btn-primary">Create Task</button>
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <select id="orgSwitcher" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                        <option value="">No Organization</option>
+                    </select>
+                    <a href="/static/organizations.html" class="btn btn-secondary" style="text-decoration: none;">Organizations</a>
+                    <a href="/static/teams.html" class="btn btn-secondary" style="text-decoration: none;">Teams</a>
+                    <a href="/static/roles.html" class="btn btn-secondary" style="text-decoration: none;">Roles</a>
+                    <button id="refreshBtn" class="btn btn-secondary">Refresh</button>
+                    <button id="createTaskBtn" class="btn btn-primary">Create Task</button>
+                </div>
             </div>
         </header>
 
@@ -58,6 +71,10 @@
                 <div class="filter-group">
                     <label for="projectFilter">Project ID:</label>
                     <input type="number" id="projectFilter" placeholder="Project ID...">
+                </div>
+                <div class="filter-group">
+                    <label for="organizationFilter">Organization ID:</label>
+                    <input type="number" id="organizationFilter" placeholder="Organization ID...">
                 </div>
                 <div class="filter-group">
                     <label for="createdDateFrom">Created From:</label>
@@ -187,6 +204,86 @@
         </div>
     </div>
 
+    <script src="/static/tenant-api.js"></script>
     <script src="/static/app.js"></script>
+    <script>
+        // Organization context management
+        document.addEventListener('DOMContentLoaded', () => {
+            loadOrganizationsForSwitcher();
+            updateOrganizationContext();
+            
+            const orgSwitcher = document.getElementById('orgSwitcher');
+            if (orgSwitcher) {
+                orgSwitcher.addEventListener('change', async (e) => {
+                    const orgId = parseInt(e.target.value);
+                    if (orgId) {
+                        try {
+                            await switchOrganization(orgId);
+                            updateOrganizationContext();
+                            // Reload tasks and apply filters
+                            if (window.loadTasks) {
+                                window.loadTasks();
+                            } else if (window.applyFilters) {
+                                window.applyFilters();
+                            }
+                        } catch (error) {
+                            console.error('Failed to switch organization:', error);
+                        }
+                    } else {
+                        setCurrentOrganizationId(0);
+                        updateOrganizationContext();
+                    }
+                });
+            }
+        });
+
+        async function loadOrganizationsForSwitcher() {
+            try {
+                const orgs = await listOrganizations();
+                const switcher = document.getElementById('orgSwitcher');
+                if (switcher) {
+                    // Clear existing options except the first one
+                    while (switcher.children.length > 1) {
+                        switcher.removeChild(switcher.lastChild);
+                    }
+                    
+                    const currentOrgId = getCurrentOrganizationId();
+                    
+                    orgs.forEach(org => {
+                        const option = document.createElement('option');
+                        option.value = org.id;
+                        option.textContent = org.name;
+                        if (org.id === currentOrgId) {
+                            option.selected = true;
+                        }
+                        switcher.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load organizations:', error);
+            }
+        }
+
+        function updateOrganizationContext() {
+            const orgContext = document.getElementById('orgContext');
+            const currentOrgId = getCurrentOrganizationId();
+            
+            if (orgContext && currentOrgId) {
+                // Try to get organization name
+                listOrganizations().then(orgs => {
+                    const org = orgs.find(o => o.id === currentOrgId);
+                    if (org) {
+                        orgContext.textContent = `Organization: ${org.name} (ID: ${org.id})`;
+                    } else {
+                        orgContext.textContent = `Organization ID: ${currentOrgId}`;
+                    }
+                }).catch(() => {
+                    orgContext.textContent = `Organization ID: ${currentOrgId}`;
+                });
+            } else if (orgContext) {
+                orgContext.textContent = '';
+            }
+        }
+    </script>
 </body>
 </html>

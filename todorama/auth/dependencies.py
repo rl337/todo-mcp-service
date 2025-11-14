@@ -1,9 +1,18 @@
 """
 Authentication and authorization dependencies for FastAPI.
 """
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Callable
+from functools import wraps
+import logging
+
 from todorama.adapters.http_framework import HTTPFrameworkAdapter
 from todorama.adapters.validation import ValidationAdapter
+from todorama.auth.permissions import (
+    has_permission, get_user_permissions_from_roles, ADMIN
+)
+from todorama.services.role_service import RoleService
+
+logger = logging.getLogger(__name__)
 
 # Initialize adapters
 http_adapter = HTTPFrameworkAdapter()
@@ -73,9 +82,13 @@ async def verify_api_key(
     # Update last used timestamp
     db.update_api_key_last_used(key_info["id"])
     
+    # Extract organization_id from API key
+    organization_id = key_info.get("organization_id")
+    
     # Store in request state for use in endpoints
     request.state.project_id = key_info["project_id"]
     request.state.key_id = key_info["id"]
+    request.state.organization_id = organization_id
     
     # Get admin status
     is_admin = db.is_api_key_admin(key_info["id"])
@@ -84,6 +97,7 @@ async def verify_api_key(
     return {
         "key_id": key_info["id"],
         "project_id": key_info["project_id"],
+        "organization_id": organization_id,
         "is_admin": is_admin
     }
 
@@ -159,10 +173,17 @@ async def verify_session_token(
     request.state.session_id = session["id"]
     request.state.session_token = token
     
+    # Get organization_id from session if available
+    organization_id = session.get("organization_id")
+    if organization_id:
+        request.state.organization_id = organization_id
+    
     return {
         "user_id": session["user_id"],
         "session_id": session["id"],
-        "session_token": token
+        "session_token": token,
+        "organization_id": organization_id,
+        "auth_type": "session"
     }
 
 
@@ -201,9 +222,13 @@ async def verify_user_auth(
         if session:
             request.state.user_id = session["user_id"]
             request.state.session_id = session["id"]
+            organization_id = session.get("organization_id")
+            if organization_id:
+                request.state.organization_id = organization_id
             return {
                 "user_id": session["user_id"],
                 "session_id": session["id"],
+                "organization_id": organization_id,
                 "auth_type": "session"
             }
     
@@ -222,9 +247,13 @@ async def verify_user_auth(
             db.update_api_key_last_used(key_info["id"])
             request.state.project_id = key_info["project_id"]
             request.state.key_id = key_info["id"]
+            organization_id = key_info.get("organization_id")
+            if organization_id:
+                request.state.organization_id = organization_id
             return {
                 "key_id": key_info["id"],
                 "project_id": key_info["project_id"],
+                "organization_id": organization_id,
                 "auth_type": "api_key"
             }
     
@@ -255,4 +284,185 @@ async def optional_api_key(
         return await verify_api_key(request, authorization, db)
     except HTTPException:
         return None
+
+
+async def get_current_organization(
+    request: Request,
+    auth: Optional[Dict[str, Any]] = None,
+    db=None
+) -> Optional[int]:
+    """
+    Get the current organization ID from request state, API key, or session.
+    
+    This dependency extracts organization_id from:
+    1. Request state (set by verify_api_key or verify_session_token)
+    2. API key's organization_id
+    3. Session's organization_id
+    
+    Returns:
+        Organization ID if available, None otherwise
+    """
+    if db is None:
+        try:
+            import main
+            db = main.db
+        except (AttributeError, ImportError):
+            from todorama.dependencies.services import get_db
+            db = get_db()
+    
+    # Try to get from request state (set by verify_api_key or verify_session_token)
+    if hasattr(request.state, 'organization_id') and request.state.organization_id is not None:
+        return request.state.organization_id
+    
+    # If auth dict provided, try to get from it
+    if auth:
+        org_id = auth.get("organization_id")
+        if org_id is not None:
+            return org_id
+        
+        # For session-based auth, get from session's organization_id
+        if auth.get("auth_type") == "session":
+            user_id = auth.get("user_id")
+            if user_id:
+                # Get user's organizations (first one as default)
+                orgs = db.list_organizations(user_id=user_id)
+                if orgs:
+                    return orgs[0]["id"]
+    
+    return None
+
+
+async def require_organization(
+    request: Request,
+    organization_id: Optional[int] = Depends(get_current_organization),
+    db=None
+) -> int:
+    """
+    Dependency that requires an organization context to exist.
+    
+    Raises:
+        HTTPException 403 if no organization context is available
+    """
+    if organization_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Organization context required. Please ensure you're authenticated with an API key or session that has an organization."
+        )
+    return organization_id
+
+
+def get_user_roles(
+    user_id: int,
+    organization_id: Optional[int] = None,
+    team_id: Optional[int] = None,
+    db=None
+) -> List[Dict[str, Any]]:
+    """
+    Get user's roles in an organization or team.
+    
+    Args:
+        user_id: User ID
+        organization_id: Optional organization ID
+        team_id: Optional team ID
+        db: Database instance
+        
+    Returns:
+        List of role dictionaries
+    """
+    if db is None:
+        try:
+            import main
+            db = main.db
+        except (AttributeError, ImportError):
+            from todorama.dependencies.services import get_db
+            db = get_db()
+    
+    role_service = RoleService(db)
+    return role_service.get_user_roles(user_id, organization_id, team_id)
+
+
+def require_permission(permission: str):
+    """
+    Dependency factory that creates a permission checker.
+    
+    Usage:
+        @router.post("/tasks")
+        async def create_task(
+            request: Request,
+            auth: Dict = Depends(verify_user_auth),
+            _: None = Depends(require_permission("TASK_CREATE"))
+        ):
+            ...
+    
+    Args:
+        permission: Required permission string
+        
+    Returns:
+        Dependency function that checks permission
+    """
+    async def check_permission(
+        request: Request,
+        auth: Dict[str, Any] = Depends(verify_user_auth),
+        db=None
+    ) -> None:
+        """
+        Check if user has the required permission.
+        Raises HTTPException 403 if permission denied.
+        """
+        if db is None:
+            try:
+                import main
+                db = main.db
+            except (AttributeError, ImportError):
+                from todorama.dependencies.services import get_db
+                db = get_db()
+        
+        # Admin API keys bypass permission checks
+        if auth.get("is_admin", False):
+            return None
+        
+        # Get user ID from auth
+        user_id = auth.get("user_id")
+        if not user_id:
+            # For API key auth, we need to check if it's admin or get organization context
+            # For now, if no user_id, check admin status
+            if not auth.get("is_admin", False):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Permission denied: {permission} required"
+                )
+            return None
+        
+        # Get organization context
+        organization_id = None
+        if hasattr(request.state, 'organization_id'):
+            organization_id = request.state.organization_id
+        else:
+            # Try to get from user's default organization
+            orgs = db.list_organizations(user_id=user_id)
+            if orgs:
+                organization_id = orgs[0]["id"]
+        
+        if not organization_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Organization context required for permission check"
+            )
+        
+        # Get user roles
+        roles = get_user_roles(user_id, organization_id=organization_id, db=db)
+        
+        # Extract permissions from roles
+        user_permissions = get_user_permissions_from_roles(roles)
+        
+        # Check permission
+        if not has_permission(user_permissions, permission):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Permission denied: {permission} required"
+            )
+        
+        return None
+    
+    return check_permission
 

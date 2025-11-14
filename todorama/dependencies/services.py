@@ -8,6 +8,7 @@ import tempfile
 from typing import Optional
 
 from todorama.database import TodoDatabase
+from todorama.config import get_database_path, ensure_database_directory
 from todorama.backup import BackupManager, BackupScheduler
 from todorama.conversation_storage import ConversationStorage
 from todorama.conversation_backup import ConversationBackupManager, BackupScheduler as ConversationBackupScheduler
@@ -25,16 +26,12 @@ class ServiceContainer:
     
     def __init__(self):
         # Initialize database
-        # Use tempfile.gettempdir() as fallback if /app is not writable (e.g., in test environments)
-        default_db_path = "/app/data/todos.db"
-        try:
-            # Check if /app is writable
-            os.makedirs("/app/data", exist_ok=True)
-            db_path = os.getenv("TODO_DB_PATH", default_db_path)
-        except (PermissionError, OSError):
-            # Fallback to temp directory if /app is not accessible
-            temp_dir = tempfile.gettempdir()
-            db_path = os.getenv("TODO_DB_PATH", os.path.join(temp_dir, "todos.db"))
+        # Use centralized configuration for database path resolution
+        # The get_database_path() function handles TODO_DB_PATH env var,
+        # container detection, and default path resolution
+        db_path = get_database_path()
+        # Ensure the database directory exists
+        ensure_database_directory(db_path)
         
         self.db = TodoDatabase(db_path)
         

@@ -1,7 +1,8 @@
 """
-Migrate command - Migrate data from SQLite to PostgreSQL.
+Migrate command - Migrate data from SQLite to PostgreSQL or add multi-tenancy.
 """
 import os
+import sys
 import sqlite3
 import logging
 from todorama.__main__ import Command
@@ -10,35 +11,102 @@ logger = logging.getLogger(__name__)
 
 
 class MigrateCommand(Command):
-    """Command to migrate data from SQLite to PostgreSQL."""
+    """Command to migrate data from SQLite to PostgreSQL or add multi-tenancy."""
     
     @classmethod
     def add_arguments(cls, parser):
         """Add migrate-specific arguments."""
+        # Support subcommands: add_multi_tenancy
         parser.add_argument(
-            "sqlite_db",
-            help="Path to SQLite database file"
+            "subcommand_or_sqlite_db",
+            nargs="?",
+            help="Subcommand (add_multi_tenancy) or path to SQLite database file"
         )
         parser.add_argument(
             "postgresql_conn",
+            nargs="?",
             help="PostgreSQL connection string (e.g., 'host=localhost port=5432 dbname=todos user=postgres password=pass')"
+        )
+        parser.add_argument(
+            "--rollback",
+            action="store_true",
+            help="Rollback the migration (for add_multi_tenancy)"
+        )
+        parser.add_argument(
+            "--rollback-file",
+            default="migration_rollback.json",
+            help="Path to rollback data file (default: migration_rollback.json)"
         )
     
     def init(self):
         """Initialize the migrate command."""
         super().init()
         
-        # Validate SQLite database exists
-        if not os.path.exists(self.args.sqlite_db):
-            raise FileNotFoundError(f"SQLite database not found: {self.args.sqlite_db}")
+        # Check if this is a subcommand
+        subcommand = self.args.subcommand_or_sqlite_db
         
-        logger.info(f"Migration initialized: {self.args.sqlite_db} -> PostgreSQL")
+        if subcommand == "add_multi_tenancy":
+            # This is the add_multi_tenancy subcommand
+            self.subcommand = "add_multi_tenancy"
+            logger.info("Initialized add_multi_tenancy migration")
+        else:
+            # This is the legacy SQLite to PostgreSQL migration
+            self.subcommand = None
+            if not subcommand:
+                raise ValueError("Missing required argument: sqlite_db or subcommand")
+            if not os.path.exists(subcommand):
+                raise FileNotFoundError(f"SQLite database not found: {subcommand}")
+            if not self.args.postgresql_conn:
+                raise ValueError("Missing required argument: postgresql_conn")
+            logger.info(f"Migration initialized: {subcommand} -> PostgreSQL")
     
     def run(self) -> int:
         """Run the migration."""
         try:
+            if self.subcommand == "add_multi_tenancy":
+                return self._run_add_multi_tenancy()
+            else:
+                return self._run_sqlite_to_postgresql()
+        except Exception as e:
+            logger.error(f"Migration failed: {e}", exc_info=True)
+            return 1
+    
+    def _run_add_multi_tenancy(self) -> int:
+        """Run the add_multi_tenancy migration."""
+        # Get the project root directory (parent of todorama package)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        migrations_path = os.path.join(project_root, "migrations")
+        
+        if not os.path.exists(migrations_path):
+            logger.error(f"Migration directory not found: {migrations_path}")
+            return 1
+        
+        # Add project root to path to import migrations
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        
+        # Import the migration module
+        from migrations.add_multi_tenancy import MultiTenancyMigration
+        from todorama.database import TodoDatabase
+        
+        # Initialize database
+        db = TodoDatabase()
+        
+        # Create migration instance
+        migration = MultiTenancyMigration(db)
+        
+        if self.args.rollback:
+            success = migration.rollback(self.args.rollback_file)
+            return 0 if success else 1
+        else:
+            success = migration.run()
+            return 0 if success else 1
+    
+    def _run_sqlite_to_postgresql(self) -> int:
+        """Run the SQLite to PostgreSQL migration."""
+        try:
             self._migrate_sqlite_to_postgresql(
-                self.args.sqlite_db,
+                self.args.subcommand_or_sqlite_db,
                 self.args.postgresql_conn
             )
             logger.info("Migration completed successfully!")

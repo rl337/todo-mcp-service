@@ -4,7 +4,10 @@ Parser for Cursor Agent JSON output.
 Extracts human-readable content from agent logs.
 """
 import json
+import re
 import sys
+import textwrap
+import shlex
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -21,6 +24,65 @@ def format_timestamp(ts: Optional[str]) -> str:
         return ts
 
 
+def format_terminal_command(cmd: str, max_width: int = 100) -> str:
+    """Format terminal command with parameterization for human consumption."""
+    if not cmd:
+        return ""
+    
+    # Try to parse command into parts for better formatting
+    try:
+        # Use shlex to safely split the command
+        parts = shlex.split(cmd)
+        if len(parts) == 0:
+            return cmd
+        
+        base_cmd = parts[0]
+        args = parts[1:]
+        
+        # If command is short, show it on one line
+        if len(cmd) <= max_width:
+            return f"  → Running: {cmd}"
+        
+        # For long commands, format with parameters
+        result = [f"  → Running: {base_cmd}"]
+        
+        # Group arguments logically
+        current_line = "      "
+        for arg in args:
+            # If adding this arg would exceed width, start new line
+            if len(current_line) + len(arg) + 1 > max_width and current_line.strip():
+                result.append(current_line.rstrip())
+                current_line = "      "
+            
+            # Check if this looks like a flag/option
+            if arg.startswith('-'):
+                # Flags get their own line if they're long or have values
+                if len(arg) > 20 or '=' in arg:
+                    if current_line.strip():
+                        result.append(current_line.rstrip())
+                    result.append(f"      {arg}")
+                    current_line = "      "
+                else:
+                    current_line += f" {arg}"
+            else:
+                # Regular arguments
+                current_line += f" {arg}"
+        
+        if current_line.strip():
+            result.append(current_line.rstrip())
+        
+        return "\n".join(result)
+    except (ValueError, AttributeError):
+        # If parsing fails, just wrap the command
+        if len(cmd) <= max_width:
+            return f"  → Running: {cmd}"
+        else:
+            # Wrap long command
+            wrapped = textwrap.wrap(cmd, width=max_width, initial_indent="  → Running: ", 
+                                   subsequent_indent="      ")
+            return "\n".join(wrapped)
+
+
 def extract_tool_call(tool_call: Dict[str, Any]) -> str:
     """Extract human-readable tool call information."""
     tool_name = tool_call.get("name", "unknown")
@@ -29,25 +91,71 @@ def extract_tool_call(tool_call: Dict[str, Any]) -> str:
     # Format tool call based on type
     if tool_name == "run_terminal_cmd":
         cmd = args.get("command", "")
-        # Truncate long commands
-        if len(cmd) > 80:
-            cmd = cmd[:77] + "..."
-        return f"  → Running: {cmd}"
+        is_background = args.get("is_background", False)
+        explanation = args.get("explanation", "")
+        
+        result = format_terminal_command(cmd)
+        if is_background:
+            result += "\n      [running in background]"
+        if explanation:
+            result += f"\n      # {explanation}"
+        return result
     elif tool_name == "read_file":
         file_path = args.get("target_file", "")
+        offset = args.get("offset")
+        limit = args.get("limit")
+        params = []
+        if offset is not None:
+            params.append(f"offset={offset}")
+        if limit is not None:
+            params.append(f"limit={limit}")
+        if params:
+            return f"  → Reading: {file_path} ({', '.join(params)})"
         return f"  → Reading: {file_path}"
     elif tool_name == "write":
         file_path = args.get("file_path", "")
+        contents = args.get("contents", "")
+        line_count = len(contents.split('\n')) if contents else 0
+        if line_count > 0:
+            return f"  → Writing: {file_path} ({line_count} lines)"
         return f"  → Writing: {file_path}"
     elif tool_name == "search_replace":
         file_path = args.get("file_path", "")
+        replace_all = args.get("replace_all", False)
+        old_len = len(args.get("old_string", ""))
+        new_len = len(args.get("new_string", ""))
+        params = []
+        if replace_all:
+            params.append("replace_all=True")
+        if old_len > 0:
+            params.append(f"old_string={old_len} chars")
+        if new_len > 0:
+            params.append(f"new_string={new_len} chars")
+        if params:
+            return f"  → Editing: {file_path} ({', '.join(params)})"
         return f"  → Editing: {file_path}"
     elif tool_name == "grep":
         pattern = args.get("pattern", "")
         path = args.get("path", "")
-        return f"  → Searching: {pattern[:50]} in {path}"
+        output_mode = args.get("output_mode", "content")
+        params = [f"mode={output_mode}"]
+        if args.get("head_limit"):
+            params.append(f"limit={args['head_limit']}")
+        return f"  → Searching: {pattern[:50]}{'...' if len(pattern) > 50 else ''} in {path} ({', '.join(params)})"
     else:
-        return f"  → {tool_name}({', '.join(f'{k}={v}' for k, v in list(args.items())[:2])})"
+        # Format other tool calls with parameters
+        param_strs = []
+        for k, v in list(args.items())[:5]:  # Show up to 5 params
+            if isinstance(v, str) and len(v) > 50:
+                param_strs.append(f"{k}='{v[:47]}...'")
+            elif isinstance(v, (dict, list)):
+                param_strs.append(f"{k}=<{type(v).__name__}>")
+            else:
+                param_strs.append(f"{k}={v}")
+        if len(args) > 5:
+            param_strs.append(f"... ({len(args) - 5} more)")
+        params_str = ", ".join(param_strs) if param_strs else "no args"
+        return f"  → {tool_name}({params_str})"
 
 
 def extract_tool_result(tool_result: Dict[str, Any]) -> str:
@@ -179,9 +287,15 @@ def parse_agent_output(line: str) -> Optional[str]:
                 output_parts.append(f"  → Editing: {path}")
             elif tool_name == "run_terminal":
                 cmd = args.get("command", "?")
-                if len(cmd) > 80:
-                    cmd = cmd[:77] + "..."
-                output_parts.append(f"  → Running: {cmd}")
+                is_background = args.get("is_background", False)
+                explanation = args.get("explanation", "")
+                
+                formatted_cmd = format_terminal_command(cmd)
+                output_parts.append(formatted_cmd)
+                if is_background:
+                    output_parts.append("      [running in background]")
+                if explanation:
+                    output_parts.append(f"      # {explanation}")
             elif tool_name == "grep":
                 pattern = args.get("pattern", "?")
                 path = args.get("path", "?")
@@ -386,6 +500,20 @@ def parse_agent_output(line: str) -> Optional[str]:
     return None
 
 
+def collapse_newlines(text: str) -> str:
+    """Collapse multiple consecutive newlines into single newlines."""
+    if not text:
+        return text
+    
+    # Replace 2+ newlines with exactly 2 newlines (one blank line)
+    # First, normalize all newline variations
+    text = re.sub(r'\r\n', '\n', text)
+    text = re.sub(r'\r', '\n', text)
+    # Collapse 3+ newlines to 2
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text
+
+
 def main():
     """Main parser function."""
     # Don't print header if output is being piped (non-interactive)
@@ -398,6 +526,7 @@ def main():
     line_count = 0
     parsed_count = 0
     last_output = None
+    buffer = []  # Buffer to collect output before printing
     
     try:
         for line in sys.stdin:
@@ -415,9 +544,15 @@ def main():
                 # Avoid duplicate consecutive outputs
                 if parsed != last_output:
                     parsed_count += 1
-                    print(parsed)
-                    print()  # Blank line between entries
+                    buffer.append(parsed)
                     last_output = parsed
+        
+        # Process buffer to collapse double newlines
+        if buffer:
+            output = "\n\n".join(buffer)
+            # Collapse any remaining excessive newlines
+            output = collapse_newlines(output)
+            print(output)
     
     except KeyboardInterrupt:
         if sys.stdout.isatty():

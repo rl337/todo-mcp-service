@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, UTC
 
 from todorama.database import TodoDatabase
+from todorama.storage import TaskRepository, ProjectRepository
 from todorama.models.task_models import TaskCreate, TaskUpdate, TaskResponse
 
 logger = logging.getLogger(__name__)
@@ -17,9 +18,36 @@ logger = logging.getLogger(__name__)
 class TaskService:
     """Service for task business logic."""
     
-    def __init__(self, db: TodoDatabase):
-        """Initialize task service with database dependency."""
-        self.db = db
+    def __init__(
+        self,
+        task_repository: Optional[TaskRepository] = None,
+        project_repository: Optional[ProjectRepository] = None,
+        db: Optional[TodoDatabase] = None,
+    ):
+        """
+        Initialize task service with repository dependencies.
+        
+        Args:
+            task_repository: TaskRepository instance for task operations
+            project_repository: ProjectRepository instance for project operations
+            db: TodoDatabase instance (optional, for backward compatibility and complex operations)
+            
+        Note: For backward compatibility, if repositories are not provided, db is required.
+        If db is provided, repositories will be created from it.
+        """
+        if task_repository is None or project_repository is None:
+            if db is None:
+                raise ValueError("Either repositories or db must be provided")
+            # Create repositories from db for backward compatibility
+            self.task_repository = TaskRepository(db)
+            self.project_repository = ProjectRepository(db)
+            self.db = db
+        else:
+            self.task_repository = task_repository
+            self.project_repository = project_repository
+            # Keep db reference for complex operations not yet in repositories
+            # (webhooks, activity feed, relationships, etc.)
+            self.db = db if db is not None else task_repository.db
     
     def create_task(self, task_data: TaskCreate, auth_info: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -27,24 +55,38 @@ class TaskService:
         
         Args:
             task_data: Task creation data
-            auth_info: Authentication information (contains project_id if authenticated)
+            auth_info: Authentication information (contains project_id and organization_id if authenticated)
             
         Returns:
             Created task data as dictionary
             
         Raises:
-            ValueError: If project validation fails
+            ValueError: If project validation fails or tenant isolation is violated
             Exception: If task creation fails
         """
+        # Get organization_id from auth context
+        organization_id = auth_info.get("organization_id")
+        
         # Verify project exists if provided
         if task_data.project_id is not None:
-            project = self.db.get_project(task_data.project_id)
+            project = self.project_repository.get_by_id(task_data.project_id, organization_id=organization_id)
             if not project:
-                raise ValueError(f"Project with ID {task_data.project_id} not found")
+                raise ValueError(f"Project with ID {task_data.project_id} not found or not accessible")
             
-            # Verify API key is for this project
-            if auth_info.get("project_id") != task_data.project_id:
+            # Verify API key is for this project (admin keys can work across projects)
+            auth_project_id = auth_info.get("project_id")
+            is_admin = auth_info.get("is_admin", False)
+            if auth_project_id != task_data.project_id and not is_admin:
                 raise ValueError("API key is not authorized for this project")
+            
+            # Tenant isolation: Ensure project belongs to the same organization
+            project_org_id = project.get("organization_id")
+            if organization_id is not None and project_org_id != organization_id:
+                raise ValueError("Project does not belong to your organization")
+            
+            # Use project's organization_id if not provided in auth
+            if organization_id is None:
+                organization_id = project_org_id
         
         # Parse due_date if provided
         due_date_obj = None
@@ -64,7 +106,7 @@ class TaskService:
         
         # Create task
         try:
-            task_id = self.db.create_task(
+            task_id = self.task_repository.create(
                 title=task_data.title,
                 task_type=task_data.task_type,
                 task_instruction=task_data.task_instruction,
@@ -74,14 +116,15 @@ class TaskService:
                 notes=task_data.notes,
                 priority=task_data.priority,
                 estimated_hours=task_data.estimated_hours,
-                due_date=due_date_obj if task_data.due_date else None
+                due_date=due_date_obj if task_data.due_date else None,
+                organization_id=organization_id
             )
         except Exception as e:
             logger.error(f"Failed to create task: {str(e)}", exc_info=True)
             raise Exception("Failed to create task. Please try again or contact support if the issue persists.")
         
         # Retrieve created task
-        created_task = self.db.get_task(task_id)
+        created_task = self.task_repository.get_by_id(task_id)
         if not created_task:
             logger.error(f"Task {task_id} was created but could not be retrieved")
             raise Exception("Task was created but could not be retrieved. Please check task status.")
@@ -114,7 +157,7 @@ class TaskService:
         # Send Slack notification
         try:
             from slack import send_task_notification
-            project = self.db.get_project(project_id) if project_id else None
+            project = self.project_repository.get_by_id(project_id) if project_id else None
             
             async def send_slack_notif():
                 loop = asyncio.get_event_loop()
@@ -130,9 +173,18 @@ class TaskService:
         except Exception as e:
             logger.warning(f"Failed to dispatch Slack notification: {e}")
     
-    def get_task(self, task_id: int) -> Optional[Dict[str, Any]]:
-        """Get a task by ID."""
-        task = self.db.get_task(task_id)
+    def get_task(self, task_id: int, organization_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get a task by ID with tenant isolation.
+        
+        Args:
+            task_id: Task ID
+            organization_id: Optional organization ID for tenant isolation
+        
+        Returns:
+            Task dictionary if found and accessible, None otherwise
+        """
+        task = self.task_repository.get_by_id(task_id, organization_id=organization_id)
         return dict(task) if task else None
     
     def get_task_for_webhook(self, task_id: int) -> Optional[Dict[str, Any]]:
@@ -159,72 +211,97 @@ class TaskService:
         updated_before: Optional[str] = None,
         completed_after: Optional[str] = None,
         completed_before: Optional[str] = None,
-        search: Optional[str] = None
+        search: Optional[str] = None,
+        organization_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Query tasks with filters including advanced date range and text search.
         
+        Args:
+            organization_id: Optional organization ID for tenant isolation
+        
         Returns:
             List of task dictionaries
         """
-        return self.db.query_tasks(
+        # For complex queries with date ranges and tags, use db directly
+        # TODO: Extend TaskRepository to support these filters
+        if (tag_id is not None or tag_ids is not None or 
+            created_after is not None or created_before is not None or
+            updated_after is not None or updated_before is not None or
+            completed_after is not None or completed_before is not None):
+            return self.db.query_tasks(
+                task_type=task_type,
+                task_status=task_status,
+                assigned_agent=assigned_agent,
+                project_id=project_id,
+                priority=priority,
+                tag_id=tag_id,
+                tag_ids=tag_ids,
+                order_by=order_by,
+                limit=limit,
+                created_after=created_after,
+                created_before=created_before,
+                updated_after=updated_after,
+                updated_before=updated_before,
+                completed_after=completed_after,
+                completed_before=completed_before,
+                search=search,
+                organization_id=organization_id
+            )
+        # For simpler queries, use repository
+        return self.task_repository.list(
             task_type=task_type,
             task_status=task_status,
             assigned_agent=assigned_agent,
             project_id=project_id,
             priority=priority,
-            tag_id=tag_id,
-            tag_ids=tag_ids,
-            order_by=order_by,
+            organization_id=organization_id,
             limit=limit,
-            created_after=created_after,
-            created_before=created_before,
-            updated_after=updated_after,
-            updated_before=updated_before,
-            completed_after=completed_after,
-            completed_before=completed_before,
-            search=search
+            order_by=order_by,
         )
     
-    def search_tasks(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def search_tasks(self, query: str, limit: int = 100, organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Search tasks using full-text search across titles, instructions, and notes.
         
         Args:
             query: Search query string
             limit: Maximum number of results
+            organization_id: Optional organization ID for tenant isolation
             
         Returns:
             List of task dictionaries matching the search query
         """
         if not query or not query.strip():
             raise ValueError("Search query cannot be empty or contain only whitespace")
-        return self.db.search_tasks(query.strip(), limit=limit)
+        return self.task_repository.search(query.strip(), organization_id=organization_id, limit=limit)
     
-    def get_overdue_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_overdue_tasks(self, limit: int = 100, organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get tasks that are overdue (past due date and not complete).
         
         Args:
             limit: Maximum number of results
+            organization_id: Optional organization ID for tenant isolation
             
         Returns:
             List of overdue task dictionaries
         """
-        return self.db.get_overdue_tasks(limit=limit)
+        return self.db.get_overdue_tasks(limit=limit, organization_id=organization_id)
     
-    def get_tasks_approaching_deadline(self, days_ahead: int = 3, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_tasks_approaching_deadline(self, days_ahead: int = 3, limit: int = 100, organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get tasks that are approaching their deadline.
         
         Args:
             days_ahead: Number of days ahead to look for approaching deadlines
             limit: Maximum number of results
+            organization_id: Optional organization ID for tenant isolation
             
         Returns:
             List of task dictionaries approaching deadline
         """
-        return self.db.get_tasks_approaching_deadline(days_ahead=days_ahead, limit=limit)
+        return self.db.get_tasks_approaching_deadline(days_ahead=days_ahead, limit=limit, organization_id=organization_id)
     
     def get_activity_feed(
         self,
@@ -256,24 +333,25 @@ class TaskService:
             limit=limit
         )
     
-    def get_task_relationships(self, task_id: int, relationship_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_task_relationships(self, task_id: int, relationship_type: Optional[str] = None, organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
-        Get relationships for a task.
+        Get relationships for a task with tenant isolation.
         
         Args:
             task_id: Task ID
             relationship_type: Optional relationship type filter
+            organization_id: Optional organization ID for tenant isolation
             
         Returns:
             List of relationship dictionaries
             
         Raises:
-            ValueError: If task not found
+            ValueError: If task not found or not accessible
         """
-        # Verify task exists
-        task = self.db.get_task(task_id)
+        # Verify task exists and is accessible
+        task = self.task_repository.get_by_id(task_id, organization_id=organization_id)
         if not task:
-            raise ValueError(f"Task {task_id} not found")
+            raise ValueError(f"Task {task_id} not found or not accessible")
         
         return self.db.get_related_tasks(task_id, relationship_type=relationship_type)
 

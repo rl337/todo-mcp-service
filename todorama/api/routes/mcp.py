@@ -4,11 +4,20 @@ MCP (Model Context Protocol) API routes.
 from typing import Optional, List, Dict, Any
 from todorama.adapters.http_framework import HTTPFrameworkAdapter
 from todorama.mcp_api import MCPTodoAPI
+from todorama.auth.dependencies import optional_api_key, get_current_organization
+from todorama.exceptions import (
+    TaskNotFoundError,
+    ProjectNotFoundError,
+    ValidationError,
+    DuplicateError
+)
 
 # Initialize adapter
 http_adapter = HTTPFrameworkAdapter()
 Body = http_adapter.Body
 HTTPException = http_adapter.HTTPException
+Request = http_adapter.Request
+Depends = http_adapter.Depends
 
 # Create router using adapter, expose underlying router for compatibility
 router_adapter = http_adapter.create_router(prefix="/mcp", tags=["mcp"])
@@ -31,7 +40,6 @@ async def mcp_create_task(
     due_date: Optional[str] = Body(None, embed=True)
 ):
     """MCP: Create a new task."""
-    from fastapi import HTTPException
     result = MCPTodoAPI.create_task(
         title, task_type, task_instruction, verification_instruction, agent_id,
         project_id=project_id, parent_task_id=parent_task_id, relationship_type=relationship_type,
@@ -41,11 +49,17 @@ async def mcp_create_task(
         error_msg = result.get("error", "Unknown error")
         # Check if it's a circular dependency or validation error
         if "circular" in error_msg.lower() or "dependency" in error_msg.lower():
-            raise HTTPException(status_code=400, detail=error_msg)
+            raise ValidationError(message=error_msg)
         elif "not found" in error_msg.lower():
-            raise HTTPException(status_code=404, detail=error_msg)
+            # Try to extract resource type and ID from error message
+            if "project" in error_msg.lower():
+                raise ProjectNotFoundError(project_id or "unknown")
+            elif "task" in error_msg.lower():
+                raise TaskNotFoundError(parent_task_id or "unknown")
+            else:
+                raise ValidationError(message=error_msg)
         else:
-            raise HTTPException(status_code=400, detail=error_msg)
+            raise ValidationError(message=error_msg)
     return result
 
 
@@ -372,9 +386,14 @@ async def mcp_jsonrpc(request: dict = Body(...)):
 async def mcp_sse_post(request: dict = Body(...)):
     """Server-Sent Events endpoint for MCP (POST)."""
     from todorama.mcp_api import handle_jsonrpc_request
-    # POST requests with JSON-RPC should return JSON, not SSE stream
+    from todorama.adapters.http_framework import HTTPFrameworkAdapter
+    http_adapter = HTTPFrameworkAdapter()
+    StreamingResponse = http_adapter.StreamingResponse
+    # POST requests with JSON-RPC should return SSE format for Cursor's SSE client
     result = handle_jsonrpc_request(request)
-    return result
+    import json
+    sse_result = f"data: {json.dumps(result)}\n\n"
+    return StreamingResponse(content=sse_result, media_type="text/event-stream")
 
 
 @router.get("/sse")
@@ -391,12 +410,24 @@ async def mcp_sse_get():
 
 @router.post("/list_available_tasks")
 async def mcp_list_available_tasks(
+    request: Request,
     agent_type: str = Body(..., embed=True),
     project_id: Optional[int] = Body(None, embed=True),
-    limit: int = Body(10, embed=True)
+    limit: int = Body(10, embed=True),
+    auth: Optional[Dict[str, Any]] = Depends(optional_api_key)
 ):
-    """MCP: List available tasks for an agent type."""
-    tasks = MCPTodoAPI.list_available_tasks(agent_type, project_id, limit)
+    """MCP: List available tasks for an agent type. Filters by organization if authenticated."""
+    from todorama.dependencies.services import get_db
+    
+    # Get organization_id from request context if authenticated
+    organization_id = None
+    if auth:
+        db = get_db()
+        org_id = await get_current_organization(request, auth, db)
+        if org_id:
+            organization_id = org_id
+    
+    tasks = MCPTodoAPI.list_available_tasks(agent_type, project_id, limit, organization_id=organization_id)
     return {"tasks": tasks}
 
 

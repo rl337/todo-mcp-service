@@ -111,15 +111,23 @@ def auth_client(client, temp_db):
     db, _, _ = temp_db
     
     # Create a project and API key for authentication
-    project_id = db.create_project("Test Project", "/test/path")
+    # Use helper function that supports multi-tenancy if available
+    try:
+        from conftest import create_test_project_with_org
+        project_id, org_id = create_test_project_with_org(db, name="Test Project", local_path="/test/path")
+    except (ImportError, AttributeError):
+        # Fall back to old method if multi-tenancy helpers not available
+        project_id = db.create_project("Test Project", "/test/path")
+        org_id = None
     key_id, api_key = db.create_api_key(project_id, "Test API Key")
     
     # Create a client wrapper that adds auth headers
     class AuthenticatedClient:
-        def __init__(self, client, api_key):
+        def __init__(self, client, api_key, org_id=None):
             self.client = client
             self.headers = {"X-API-Key": api_key}
             self.project_id = project_id
+            self.org_id = org_id
             self.api_key = api_key
         
         def get(self, url, **kwargs):
@@ -152,7 +160,7 @@ def auth_client(client, temp_db):
             kwargs["headers"].update(self.headers)
             return self.client.patch(url, **kwargs)
     
-    return AuthenticatedClient(client, api_key)
+    return AuthenticatedClient(client, api_key, org_id)
 
 
 def test_health_check(client):

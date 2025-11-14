@@ -261,7 +261,8 @@ def get_database_adapter(connection_string: Optional[str] = None) -> BaseDatabas
                 connection_string = f"host={db_host} port={db_port} dbname={db_name} user={db_user}"
         else:
             # SQLite connection string (file path)
-            connection_string = os.getenv("TODO_DB_PATH", "/app/data/todos.db")
+            from todorama.config import get_database_path
+            connection_string = get_database_path()
     
     if db_type == "postgresql":
         return PostgreSQLAdapter(connection_string)

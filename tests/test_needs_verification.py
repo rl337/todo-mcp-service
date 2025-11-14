@@ -106,7 +106,7 @@ def test_needs_verification_computed_fields(client):
     assert task["task_status"] == "complete"
     assert task["verification_status"] == "unverified"
     assert task["needs_verification"] is True
-    assert task["effective_status"] == "needs_verification"
+    assert task["effective_status"] == "available"  # Verification tasks show as available
 
 
 def test_needs_verification_not_set_for_verified_tasks(client):
@@ -223,15 +223,7 @@ def test_needs_verification_in_list_available_tasks(client):
     needs_verification_task = next((t for t in tasks if t["id"] == task2_id), None)
     assert needs_verification_task is not None
     assert needs_verification_task["needs_verification"] is True
-    assert needs_verification_task["effective_status"] == "needs_verification"
-    
-    # Needs verification tasks should be prioritized (appear first)
-    # Since we order by CASE WHEN needs_verification THEN 0 ELSE 1
-    needs_verification_tasks = [t for t in tasks if t.get("needs_verification", False)]
-    available_tasks = [t for t in tasks if t.get("task_status") == "available"]
-    if needs_verification_tasks and available_tasks:
-        # The first task should be a needs_verification task
-        assert tasks[0]["needs_verification"] is True
+    assert needs_verification_task["effective_status"] == "available"  # Verification tasks show as available
 
 
 def test_needs_verification_not_in_list_available_tasks_for_breakdown(client):
@@ -297,7 +289,7 @@ def test_reserve_needs_verification_task(client):
     reserved_task = result["task"]
     assert reserved_task["id"] == task_id
     assert reserved_task["needs_verification"] is True
-    assert reserved_task["effective_status"] == "needs_verification"
+    assert reserved_task["effective_status"] == "in_progress"  # When locked, status is in_progress
     assert reserved_task["task_status"] == "in_progress"  # Should be locked now
     assert reserved_task["assigned_agent"] == "verification-agent"
 
@@ -342,7 +334,7 @@ def test_query_by_needs_verification_status(client):
     # All returned tasks should have needs_verification=True
     for task in tasks:
         assert task["needs_verification"] is True
-        assert task["effective_status"] == "needs_verification"
+        assert task["effective_status"] == "available"  # Verification tasks show as available
 
 
 def test_needs_verification_in_get_task_context(client):
@@ -368,7 +360,7 @@ def test_needs_verification_in_get_task_context(client):
     # Check that the task has computed fields
     task = context["task"]
     assert task["needs_verification"] is True
-    assert task["effective_status"] == "needs_verification"
+    assert task["effective_status"] == "available"  # Verification tasks show as available
     
     # Check that ancestry tasks also have computed fields (if any)
     for ancestry_task in context.get("ancestry", []):
@@ -458,7 +450,7 @@ def test_needs_verification_in_get_recent_completions(client):
         if "needs_verification" in task:
             # This task should have needs_verification=True (it's complete but unverified)
             assert task["needs_verification"] is True
-            assert task["effective_status"] == "needs_verification"
+            assert task["effective_status"] == "available"  # Verification tasks show as available
 
 
 def test_needs_verification_in_get_tasks_approaching_deadline(client):
@@ -496,8 +488,8 @@ def test_needs_verification_in_get_tasks_approaching_deadline(client):
         assert "effective_status" in task
 
 
-def test_needs_verification_priority_in_list_available(client):
-    """Test that needs_verification tasks are prioritized in list_available_tasks."""
+def test_needs_verification_treated_as_available(client):
+    """Test that needs_verification tasks are treated as available (no prioritization)."""
     # Create multiple tasks
     available_task_ids = []
     for i in range(3):
@@ -529,17 +521,18 @@ def test_needs_verification_priority_in_list_available(client):
     assert response.status_code == 200
     tasks = response.json()["tasks"]
     
-    # The needs_verification task should appear first (or at least before regular available tasks)
+    # The needs_verification task should appear with effective_status="available"
     needs_verification_task = next((t for t in tasks if t["id"] == needs_verification_id), None)
     assert needs_verification_task is not None
     assert needs_verification_task["needs_verification"] is True
+    assert needs_verification_task["effective_status"] == "available"  # Verification tasks show as available
     
-    # Check ordering: needs_verification tasks should come before available tasks
-    needs_verification_indices = [i for i, t in enumerate(tasks) if t.get("needs_verification", False)]
-    available_indices = [i for i, t in enumerate(tasks) if t.get("task_status") == "available" and not t.get("needs_verification", False)]
-    
-    if needs_verification_indices and available_indices:
-        assert min(needs_verification_indices) < min(available_indices), "Needs verification tasks should come before available tasks"
+    # Both available and verification tasks should have effective_status="available"
+    for task in tasks:
+        if task.get("needs_verification", False):
+            assert task["effective_status"] == "available"
+        elif task.get("task_status") == "available":
+            assert task["effective_status"] == "available"
 
 
 def test_lock_task_from_needs_verification_state(client):

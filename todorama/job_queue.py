@@ -21,6 +21,7 @@ except ImportError:
     redis = None
 
 from todorama.tracing import trace_span, add_span_attribute
+from todorama.config import get_database_path
 from todorama.adapters import HTTPClientAdapterFactory, HTTPStatusError, TimeoutException, NetworkError
 
 logger = logging.getLogger(__name__)
@@ -513,7 +514,7 @@ class BackupJobProcessor(JobProcessor):
         super().__init__(job_queue)
         if backup_manager is None:
             from backup import BackupManager
-            db_path = os.getenv("TODO_DB_PATH", "/app/data/todos.db")
+            db_path = get_database_path()
             backups_dir = os.getenv("TODO_BACKUPS_DIR", "/app/backups")
             self.backup_manager = BackupManager(db_path, backups_dir)
         else:

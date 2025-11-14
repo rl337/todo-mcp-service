@@ -15,6 +15,7 @@ import logging
 
 from todorama.db_adapter import get_database_adapter, BaseDatabaseAdapter, DatabaseType
 from todorama.tracing import trace_span, add_span_attribute
+from todorama.storage.schema import SchemaManager
 try:
     from opentelemetry import trace
 except ImportError:
@@ -102,7 +103,8 @@ class TodoDatabase:
                 else:
                     self.db_path = f"host={db_host} port={db_port} dbname={db_name} user={db_user}"
             else:
-                self.db_path = os.getenv("TODO_DB_PATH", "/app/data/todos.db")
+                from todorama.config import get_database_path
+                self.db_path = get_database_path()
         else:
             self.db_path = db_path
         
@@ -269,665 +271,72 @@ class TodoDatabase:
             return cursor.lastrowid
     
     def _init_schema(self):
-        """Initialize database schema."""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            
-            # Projects table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS projects (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE,
-                    description TEXT,
-                    origin_url TEXT,
-                    local_path TEXT NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Tasks table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_id INTEGER,
-                    title TEXT NOT NULL,
-                    task_type TEXT NOT NULL CHECK(task_type IN ('concrete', 'abstract', 'epic')),
-                    task_instruction TEXT NOT NULL,
-                    verification_instruction TEXT NOT NULL,
-                    task_status TEXT NOT NULL DEFAULT 'available' 
-                        CHECK(task_status IN ('available', 'in_progress', 'complete', 'blocked', 'cancelled')),
-                    verification_status TEXT NOT NULL DEFAULT 'unverified'
-                        CHECK(verification_status IN ('unverified', 'verified')),
-                    priority TEXT DEFAULT 'medium' 
-                        CHECK(priority IN ('low', 'medium', 'high', 'critical')),
-                    assigned_agent TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    completed_at TIMESTAMP,
-                    notes TEXT,
-                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Migration: Add priority column if it doesn't exist (for existing databases)
-            if self.db_type == "sqlite":
-                try:
-                    cursor.execute("SELECT priority FROM tasks LIMIT 1")
-                except (sqlite3.OperationalError, Exception):
-                    # Column doesn't exist, add it
-                    logger.info("Adding priority column to tasks table (migration)")
-                    query = self._normalize_sql("""
-                        ALTER TABLE tasks 
-                        ADD COLUMN priority TEXT DEFAULT 'medium' 
-                        CHECK(priority IN ('low', 'medium', 'high', 'critical'))
-                    """)
-                    self._execute_with_logging(cursor, query)
-                    # Update existing tasks to have medium priority
-                    self._execute_with_logging(cursor, "UPDATE tasks SET priority = 'medium' WHERE priority IS NULL")
-            else:
-                # PostgreSQL: Check if column exists using information_schema
-                cursor.execute("""
-                    SELECT column_name FROM information_schema.columns 
-                    WHERE table_name = 'tasks' AND column_name = 'priority'
-                """)
-                if not cursor.fetchone():
-                    logger.info("Adding priority column to tasks table (migration)")
-                    query = self._normalize_sql("ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'medium'")
-                    self._execute_with_logging(cursor, query)
-                    self._execute_with_logging(cursor, "UPDATE tasks SET priority = 'medium' WHERE priority IS NULL")
-            
-            # Migration: Add time tracking columns if they don't exist
-            if self.db_type == "sqlite":
-                try:
-                    cursor.execute("SELECT estimated_hours FROM tasks LIMIT 1")
-                except (sqlite3.OperationalError, Exception):
-                    logger.info("Adding time tracking columns to tasks table (migration)")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN estimated_hours REAL")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN actual_hours REAL")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN started_at TIMESTAMP")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN time_delta_hours REAL")
-            else:
-                # PostgreSQL
-                cursor.execute("""
-                    SELECT column_name FROM information_schema.columns 
-                    WHERE table_name = 'tasks' AND column_name = 'estimated_hours'
-                """)
-                if not cursor.fetchone():
-                    logger.info("Adding time tracking columns to tasks table (migration)")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN estimated_hours REAL")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN actual_hours REAL")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN started_at TIMESTAMP")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN time_delta_hours REAL")
-            
-            # Migration: Add due_date column if it doesn't exist
-            if self.db_type == "sqlite":
-                try:
-                    cursor.execute("SELECT due_date FROM tasks LIMIT 1")
-                except (sqlite3.OperationalError, Exception):
-                    logger.info("Adding due_date column to tasks table (migration)")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN due_date TIMESTAMP")
-                    # Add index for due_date queries
-                    self._execute_with_logging(cursor, "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)")
-            else:
-                # PostgreSQL
-                cursor.execute("""
-                    SELECT column_name FROM information_schema.columns 
-                    WHERE table_name = 'tasks' AND column_name = 'due_date'
-                """)
-                if not cursor.fetchone():
-                    logger.info("Adding due_date column to tasks table (migration)")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN due_date TIMESTAMP")
-                    self._execute_with_logging(cursor, "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)")
-            
-            # Migration: Add metadata column if it doesn't exist (for storing GitHub URLs and other metadata)
-            if self.db_type == "sqlite":
-                try:
-                    cursor.execute("SELECT metadata FROM tasks LIMIT 1")
-                except (sqlite3.OperationalError, Exception):
-                    logger.info("Adding metadata column to tasks table (migration)")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN metadata TEXT")
-            else:
-                # PostgreSQL
-                cursor.execute("""
-                    SELECT column_name FROM information_schema.columns 
-                    WHERE table_name = 'tasks' AND column_name = 'metadata'
-                """)
-                if not cursor.fetchone():
-                    logger.info("Adding metadata column to tasks table (migration)")
-                    self._execute_with_logging(cursor, "ALTER TABLE tasks ADD COLUMN metadata TEXT")
-            
-            # Task relationships table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS task_relationships (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    parent_task_id INTEGER NOT NULL,
-                    child_task_id INTEGER NOT NULL,
-                    relationship_type TEXT NOT NULL
-                        CHECK(relationship_type IN ('subtask', 'blocking', 'blocked_by', 'followup', 'related')),
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-                    FOREIGN KEY (child_task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-                    UNIQUE(parent_task_id, child_task_id, relationship_type)
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Change history table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS change_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id INTEGER NOT NULL,
-                    agent_id TEXT NOT NULL,
-                    change_type TEXT NOT NULL
-                        CHECK(change_type IN ('created', 'locked', 'unlocked', 'updated', 'completed', 'verified', 'status_changed', 'relationship_added', 'progress', 'note', 'blocker', 'question', 'finding')),
-                    field_name TEXT,
-                    old_value TEXT,
-                    new_value TEXT,
-                    notes TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Migration: Fix change_history CHECK constraint if it doesn't include update types
-            # SQLite doesn't support ALTER TABLE to modify CHECK constraints, so we need to recreate
-            if self.db_type == "sqlite":
-                try:
-                    # Test if the constraint allows 'progress' type by checking the schema
-                    cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='change_history'")
-                    schema_row = cursor.fetchone()
-                    if schema_row and schema_row[0] and "'progress'" not in schema_row[0]:
-                        # Table exists but doesn't have the new constraint - need to migrate
-                        raise sqlite3.IntegrityError("Migration needed")
-                    
-                    # Test by trying to insert (table might have been created with old constraint)
-                    cursor.execute("""
-                        INSERT INTO change_history (task_id, agent_id, change_type, notes)
-                        VALUES (-1, 'test', 'progress', 'test')
-                    """)
-                    cursor.execute("DELETE FROM change_history WHERE task_id = -1")
-                except sqlite3.IntegrityError:
-                    # Constraint doesn't allow 'progress', need to migrate
-                    logger.info("Migrating change_history table to support update types (progress, note, blocker, question, finding)")
-                    
-                    # Backup existing data
-                    cursor.execute("SELECT * FROM change_history")
-                    old_data = cursor.fetchall()
-                    
-                    # Drop indexes first
-                    cursor.execute("DROP INDEX IF EXISTS idx_change_history_task")
-                    cursor.execute("DROP INDEX IF EXISTS idx_change_history_agent")
-                    cursor.execute("DROP INDEX IF EXISTS idx_change_history_created")
-                    
-                    # Drop old table (this auto-commits in SQLite)
-                    cursor.execute("DROP TABLE change_history")
-                    
-                    # Recreate with updated constraint
-                    query = self._normalize_sql("""
-                        CREATE TABLE change_history (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            task_id INTEGER NOT NULL,
-                            agent_id TEXT NOT NULL,
-                            change_type TEXT NOT NULL
-                                CHECK(change_type IN ('created', 'locked', 'unlocked', 'updated', 'completed', 'verified', 'status_changed', 'relationship_added', 'progress', 'note', 'blocker', 'question', 'finding')),
-                            field_name TEXT,
-                            old_value TEXT,
-                            new_value TEXT,
-                            notes TEXT,
-                            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-                        )
-                    """)
-                    self._execute_with_logging(cursor, query)
-                    
-                    # Recreate indexes
-                    self._execute_with_logging(cursor, "CREATE INDEX IF NOT EXISTS idx_change_history_task ON change_history(task_id)")
-                    self._execute_with_logging(cursor, "CREATE INDEX IF NOT EXISTS idx_change_history_agent ON change_history(agent_id)")
-                    self._execute_with_logging(cursor, "CREATE INDEX IF NOT EXISTS idx_change_history_created ON change_history(created_at)")
-                    
-                    # Restore data (skip rows that would violate new constraint - shouldn't be any)
-                    if old_data:
-                        cursor.executemany("""
-                            INSERT INTO change_history (id, task_id, agent_id, change_type, field_name, old_value, new_value, notes, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, old_data)
-                        # Reset sequence to avoid ID conflicts
-                        max_id = max(row[0] for row in old_data if row[0] is not None)
-                        cursor.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'change_history'", (max_id,))
-                    
-                    logger.info(f"Migrated change_history table, restored {len(old_data)} rows")
-                except Exception as e:
-                    if "Migration needed" not in str(e):
-                        logger.error(f"Error during change_history migration: {e}", exc_info=True)
-                        raise
-            
-            # Tags table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS tags (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Task tags junction table (many-to-many)
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS task_tags (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id INTEGER NOT NULL,
-                    tag_id INTEGER NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-                    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE,
-                    UNIQUE(task_id, tag_id)
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Task templates table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS task_templates (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE,
-                    description TEXT,
-                    task_type TEXT NOT NULL CHECK(task_type IN ('concrete', 'abstract', 'epic')),
-                    task_instruction TEXT NOT NULL,
-                    verification_instruction TEXT NOT NULL,
-                    priority TEXT DEFAULT 'medium' 
-                        CHECK(priority IN ('low', 'medium', 'high', 'critical')),
-                    estimated_hours REAL,
-                    notes TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Webhooks table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS webhooks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_id INTEGER NOT NULL,
-                    url TEXT NOT NULL,
-                    events TEXT NOT NULL,
-                    secret TEXT,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    retry_count INTEGER NOT NULL DEFAULT 3,
-                    timeout_seconds INTEGER NOT NULL DEFAULT 10,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Webhook delivery history table (for tracking deliveries and retries)
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS webhook_deliveries (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    webhook_id INTEGER NOT NULL,
-                    event_type TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('pending', 'success', 'failed')),
-                    response_code INTEGER,
-                    response_body TEXT,
-                    attempt_number INTEGER NOT NULL DEFAULT 1,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    delivered_at TIMESTAMP,
-                    FOREIGN KEY (webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Task versions table (for versioning task states)
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS task_versions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id INTEGER NOT NULL,
-                    version_number INTEGER NOT NULL,
-                    title TEXT,
-                    task_type TEXT,
-                    task_instruction TEXT,
-                    verification_instruction TEXT,
-                    task_status TEXT,
-                    verification_status TEXT,
-                    priority TEXT,
-                    assigned_agent TEXT,
-                    notes TEXT,
-                    estimated_hours REAL,
-                    actual_hours REAL,
-                    time_delta_hours REAL,
-                    due_date TIMESTAMP,
-                    started_at TIMESTAMP,
-                    completed_at TIMESTAMP,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    created_by TEXT NOT NULL,
-                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-                    UNIQUE(task_id, version_number)
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # File attachments table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS file_attachments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id INTEGER NOT NULL,
-                    filename TEXT NOT NULL,
-                    original_filename TEXT NOT NULL,
-                    file_path TEXT NOT NULL,
-                    file_size INTEGER NOT NULL,
-                    content_type TEXT NOT NULL,
-                    description TEXT,
-                    uploaded_by TEXT NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Task comments table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS task_comments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id INTEGER NOT NULL,
-                    agent_id TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    parent_comment_id INTEGER,
-                    mentions TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP,
-                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-                    FOREIGN KEY (parent_comment_id) REFERENCES task_comments(id) ON DELETE CASCADE
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # API keys table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS api_keys (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_id INTEGER NOT NULL,
-                    key_hash TEXT NOT NULL UNIQUE,
-                    key_prefix TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    is_admin INTEGER NOT NULL DEFAULT 0,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    last_used_at TIMESTAMP,
-                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Migration: Add is_admin column if it doesn't exist
-            if self.db_type == "sqlite":
-                try:
-                    cursor.execute("SELECT is_admin FROM api_keys LIMIT 1")
-                except (sqlite3.OperationalError, Exception):
-                    logger.info("Adding is_admin column to api_keys table (migration)")
-                    self._execute_with_logging(cursor, "ALTER TABLE api_keys ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
-            else:
-                # PostgreSQL
-                cursor.execute("""
-                    SELECT column_name FROM information_schema.columns 
-                    WHERE table_name = 'api_keys' AND column_name = 'is_admin'
-                """)
-                if not cursor.fetchone():
-                    logger.info("Adding is_admin column to api_keys table (migration)")
-                    self._execute_with_logging(cursor, "ALTER TABLE api_keys ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
-            
-            # Blocked agents table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS blocked_agents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    agent_id TEXT NOT NULL UNIQUE,
-                    reason TEXT,
-                    blocked_by TEXT NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    unblocked_at TIMESTAMP
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Audit logs table for admin actions
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS audit_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    action TEXT NOT NULL,
-                    actor TEXT NOT NULL,
-                    actor_type TEXT NOT NULL CHECK(actor_type IN ('api_key', 'user', 'system')),
-                    target_type TEXT,
-                    target_id TEXT,
-                    details TEXT,
-                    ip_address TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Users table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL UNIQUE,
-                    email TEXT NOT NULL UNIQUE,
-                    password_hash TEXT NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    last_login_at TIMESTAMP
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # User sessions table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS user_sessions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    session_token TEXT NOT NULL UNIQUE,
-                    expires_at TIMESTAMP NOT NULL,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    last_used_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Recurring tasks table
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS recurring_tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id INTEGER NOT NULL,
-                    recurrence_type TEXT NOT NULL CHECK(recurrence_type IN ('daily', 'weekly', 'monthly')),
-                    recurrence_config TEXT NOT NULL,
-                    next_occurrence TIMESTAMP NOT NULL,
-                    last_occurrence_created TIMESTAMP,
-                    is_active INTEGER NOT NULL DEFAULT 1,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Migration: Add recurring_tasks table if it doesn't exist (for existing databases)
-            if self.db_type == "sqlite":
-                try:
-                    cursor.execute("SELECT id FROM recurring_tasks LIMIT 1")
-                except (sqlite3.OperationalError, Exception):
-                    logger.info("Recurring tasks table already exists or will be created")
-            else:
-                # PostgreSQL: Check if table exists
-                cursor.execute("""
-                    SELECT table_name FROM information_schema.tables 
-                    WHERE table_name = 'recurring_tasks'
-                """)
-                if not cursor.fetchone():
-                    logger.info("Recurring tasks table will be created")
-            
-            # Agent experiences table for learning and improvement
-            query = self._normalize_sql("""
-                CREATE TABLE IF NOT EXISTS agent_experiences (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    agent_id TEXT NOT NULL,
-                    task_id INTEGER,
-                    outcome TEXT NOT NULL CHECK(outcome IN ('success', 'failure', 'partial')),
-                    execution_time_hours REAL,
-                    failure_reason TEXT,
-                    strategy_used TEXT,
-                    notes TEXT,
-                    metadata TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
-                )
-            """)
-            self._execute_with_logging(cursor, query)
-            
-            # Indexes for performance
-            indexes = [
-                "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(task_status)",
-                "CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(task_type)",
-                "CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent)",
-                "CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)",
-                "CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)",
-                "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)",
-                "CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name)",
-                "CREATE INDEX IF NOT EXISTS idx_relationships_parent ON task_relationships(parent_task_id)",
-                "CREATE INDEX IF NOT EXISTS idx_relationships_child ON task_relationships(child_task_id)",
-                "CREATE INDEX IF NOT EXISTS idx_change_history_task ON change_history(task_id)",
-                "CREATE INDEX IF NOT EXISTS idx_change_history_agent ON change_history(agent_id)",
-                "CREATE INDEX IF NOT EXISTS idx_change_history_created ON change_history(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_task_versions_task ON task_versions(task_id)",
-                "CREATE INDEX IF NOT EXISTS idx_task_versions_number ON task_versions(task_id, version_number)",
-                "CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)",
-                "CREATE INDEX IF NOT EXISTS idx_task_tags_task ON task_tags(task_id)",
-                "CREATE INDEX IF NOT EXISTS idx_task_tags_tag ON task_tags(tag_id)",
-                "CREATE INDEX IF NOT EXISTS idx_task_templates_name ON task_templates(name)",
-                "CREATE INDEX IF NOT EXISTS idx_task_templates_type ON task_templates(task_type)",
-                "CREATE INDEX IF NOT EXISTS idx_webhooks_project ON webhooks(project_id)",
-                "CREATE INDEX IF NOT EXISTS idx_webhooks_enabled ON webhooks(enabled)",
-                "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id)",
-                "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status)",
-                "CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_created ON webhook_deliveries(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_file_attachments_task ON file_attachments(task_id)",
-                "CREATE INDEX IF NOT EXISTS idx_file_attachments_created ON file_attachments(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id)",
-                "CREATE INDEX IF NOT EXISTS idx_task_comments_parent ON task_comments(parent_comment_id)",
-                "CREATE INDEX IF NOT EXISTS idx_task_comments_agent ON task_comments(agent_id)",
-                "CREATE INDEX IF NOT EXISTS idx_task_comments_created ON task_comments(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_api_keys_project ON api_keys(project_id)",
-                "CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)",
-                "CREATE INDEX IF NOT EXISTS idx_api_keys_enabled ON api_keys(enabled)",
-                "CREATE INDEX IF NOT EXISTS idx_api_keys_admin ON api_keys(is_admin)",
-                "CREATE INDEX IF NOT EXISTS idx_blocked_agents_agent_id ON blocked_agents(agent_id)",
-                "CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor)",
-                "CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)",
-                "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)",
-                "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
-                "CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id)",
-                "CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token)",
-                "CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)",
-                "CREATE INDEX IF NOT EXISTS idx_recurring_tasks_task ON recurring_tasks(task_id)",
-                "CREATE INDEX IF NOT EXISTS idx_recurring_tasks_next ON recurring_tasks(next_occurrence)",
-                "CREATE INDEX IF NOT EXISTS idx_recurring_tasks_active ON recurring_tasks(is_active)",
-                "CREATE INDEX IF NOT EXISTS idx_agent_experiences_agent ON agent_experiences(agent_id)",
-                "CREATE INDEX IF NOT EXISTS idx_agent_experiences_task ON agent_experiences(task_id)",
-                "CREATE INDEX IF NOT EXISTS idx_agent_experiences_outcome ON agent_experiences(outcome)",
-                "CREATE INDEX IF NOT EXISTS idx_agent_experiences_created ON agent_experiences(created_at)",
-                # Composite indexes
-                "CREATE INDEX IF NOT EXISTS idx_tasks_status_type ON tasks(task_status, task_type)",
-                "CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, task_status)",
-                "CREATE INDEX IF NOT EXISTS idx_tasks_project_status_type ON tasks(project_id, task_status, task_type)",
-                "CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(task_status, priority)",
-                "CREATE INDEX IF NOT EXISTS idx_relationships_parent_type ON task_relationships(parent_task_id, relationship_type)",
-                "CREATE INDEX IF NOT EXISTS idx_relationships_child_type ON task_relationships(child_task_id, relationship_type)",
-                "CREATE INDEX IF NOT EXISTS idx_task_tags_task_tag ON task_tags(task_id, tag_id)",
-            ]
-            
-            # PostgreSQL doesn't support DESC in CREATE INDEX, need separate handling
-            if self.db_type == "postgresql":
-                indexes.append("CREATE INDEX IF NOT EXISTS idx_tasks_created_status ON tasks(created_at DESC, task_status)")
-            else:
-                indexes.append("CREATE INDEX IF NOT EXISTS idx_tasks_created_status ON tasks(created_at DESC, task_status)")
-            
-            for index_query in indexes:
-                self._execute_with_logging(cursor, index_query)
-            
-            # Full-text search setup
-            if self.db_type == "sqlite":
-                # FTS5 virtual table for SQLite
-                try:
-                    self._execute_with_logging(cursor, """
-                        CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
-                            title,
-                            task_instruction,
-                            notes,
-                            content='tasks',
-                            content_rowid='id'
-                        )
-                    """)
-                    # Rebuild FTS5 index if needed
-                    try:
-                        self._execute_with_logging(cursor, "SELECT COUNT(*) FROM tasks_fts")
-                        count = cursor.fetchone()[0] if hasattr(cursor.fetchone(), '__getitem__') else cursor.fetchone()['count']
-                        if count == 0:
-                            self._execute_with_logging(cursor, "SELECT COUNT(*) FROM tasks")
-                            task_count = cursor.fetchone()[0] if hasattr(cursor.fetchone(), '__getitem__') else cursor.fetchone()['count']
-                            if task_count > 0:
-                                self._execute_with_logging(cursor, "INSERT INTO tasks_fts(tasks_fts) VALUES('rebuild')")
-                    except Exception:
-                        pass
-                except Exception:
-                    logger.warning("FTS5 not available, full-text search will use fallback")
-            else:
-                # PostgreSQL full-text search
-                if self.adapter.supports_fulltext_search():
-                    self.adapter.create_fulltext_index(cursor, "tasks", ["title", "task_instruction", "notes"])
-            
-            conn.commit()
-            logger.info(f"Database schema initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize schema: {e}")
-            raise
-        finally:
-            self.adapter.close(conn)
+        """Initialize database schema using SchemaManager."""
+        schema_manager = SchemaManager(
+            db_type=self.db_type,
+            adapter=self.adapter,
+            get_connection=self._get_connection,
+            normalize_sql=self._normalize_sql,
+            execute_with_logging=self._execute_with_logging
+        )
+        schema_manager.initialize_schema()
     
     def create_project(
         self,
         name: str,
         local_path: str,
         origin_url: Optional[str] = None,
-        description: Optional[str] = None
+        description: Optional[str] = None,
+        organization_id: Optional[int] = None
     ) -> int:
-        """Create a new project and return its ID."""
+        """
+        Create a new project and return its ID.
+        
+        Args:
+            name: Project name
+            local_path: Local filesystem path
+            origin_url: Optional origin URL (e.g., GitHub repository)
+            description: Optional project description
+            organization_id: Organization ID (required for multi-tenancy)
+        
+        Raises:
+            ValueError: If organization_id is required but not provided
+        """
+        if organization_id is None:
+            raise ValueError("organization_id is required for project creation")
+        
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             project_id = self._execute_insert(cursor, """
-                INSERT INTO projects (name, local_path, origin_url, description)
-                VALUES (?, ?, ?, ?)
-            """, (name, local_path, origin_url, description))
+                INSERT INTO projects (name, local_path, origin_url, description, organization_id)
+                VALUES (?, ?, ?, ?, ?)
+            """, (name, local_path, origin_url, description, organization_id))
             conn.commit()
-            logger.info(f"Created project {project_id}: {name}")
+            logger.info(f"Created project {project_id}: {name} (organization: {organization_id})")
             return project_id
         finally:
             self.adapter.close(conn)
     
-    def get_project(self, project_id: int) -> Optional[Dict[str, Any]]:
-        """Get a project by ID."""
+    def get_project(self, project_id: int, organization_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get a project by ID.
+        
+        Args:
+            project_id: Project ID
+            organization_id: Optional organization ID for tenant isolation. If provided,
+                           only returns project if it belongs to this organization.
+        
+        Returns:
+            Project dictionary if found and accessible, None otherwise
+        """
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+            if organization_id is not None:
+                cursor.execute("SELECT * FROM projects WHERE id = ? AND organization_id = ?", (project_id, organization_id))
+            else:
+                cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
             row = cursor.fetchone()
             if row:
                 return dict(row)
@@ -948,13 +357,646 @@ class TodoDatabase:
         finally:
             self.adapter.close(conn)
     
-    def list_projects(self) -> List[Dict[str, Any]]:
-        """List all projects."""
+    def list_projects(self, organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        List all projects, optionally filtered by organization.
+        
+        Args:
+            organization_id: Optional organization ID to filter projects by tenant
+        
+        Returns:
+            List of project dictionaries
+        """
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM projects ORDER BY created_at DESC")
+            if organization_id is not None:
+                cursor.execute("SELECT * FROM projects WHERE organization_id = ? ORDER BY created_at DESC", (organization_id,))
+            else:
+                cursor.execute("SELECT * FROM projects ORDER BY created_at DESC")
             return [dict(row) for row in cursor.fetchall()]
+        finally:
+            self.adapter.close(conn)
+    
+    # ============================================================================
+    # Organization Methods
+    # ============================================================================
+    
+    def _generate_slug(self, name: str) -> str:
+        """Generate a URL-friendly slug from a name."""
+        import re
+        import unicodedata
+        # Convert to lowercase and replace spaces with hyphens
+        slug = name.lower().strip()
+        # Remove special characters, keep only alphanumeric and hyphens
+        slug = re.sub(r'[^\w\s-]', '', slug)
+        # Replace whitespace with hyphens
+        slug = re.sub(r'[-\s]+', '-', slug)
+        # Remove leading/trailing hyphens
+        slug = slug.strip('-')
+        return slug
+    
+    def create_organization(
+        self,
+        name: str,
+        description: Optional[str] = None
+    ) -> int:
+        """Create a new organization and return its ID."""
+        # Generate slug from name
+        slug = self._generate_slug(name)
+        
+        # Ensure slug is unique
+        base_slug = slug
+        counter = 1
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            while True:
+                cursor.execute("SELECT id FROM organizations WHERE slug = ?", (slug,))
+                if not cursor.fetchone():
+                    break
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+            
+            organization_id = self._execute_insert(cursor, """
+                INSERT INTO organizations (name, slug, description)
+                VALUES (?, ?, ?)
+            """, (name, slug, description))
+            conn.commit()
+            logger.info(f"Created organization {organization_id}: {name} (slug: {slug})")
+            return organization_id
+        finally:
+            self.adapter.close(conn)
+    
+    def get_organization(self, organization_id: int) -> Optional[Dict[str, Any]]:
+        """Get an organization by ID."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM organizations WHERE id = ?", (organization_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+        finally:
+            self.adapter.close(conn)
+    
+    def get_organization_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+        """Get an organization by slug."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM organizations WHERE slug = ?", (slug,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+        finally:
+            self.adapter.close(conn)
+    
+    def list_organizations(self, user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        List organizations. If user_id is provided, only return organizations the user is a member of.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if user_id:
+                cursor.execute("""
+                    SELECT DISTINCT o.* FROM organizations o
+                    INNER JOIN organization_members om ON o.id = om.organization_id
+                    WHERE om.user_id = ?
+                    ORDER BY o.created_at DESC
+                """, (user_id,))
+            else:
+                cursor.execute("SELECT * FROM organizations ORDER BY created_at DESC")
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            self.adapter.close(conn)
+    
+    def update_organization(
+        self,
+        organization_id: int,
+        name: Optional[str] = None,
+        description: Optional[str] = None
+    ) -> bool:
+        """Update an organization."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            updates = []
+            params = []
+            
+            if name is not None:
+                updates.append("name = ?")
+                params.append(name)
+                # Update slug if name changed
+                slug = self._generate_slug(name)
+                # Ensure slug is unique (excluding current org)
+                base_slug = slug
+                counter = 1
+                while True:
+                    cursor.execute("SELECT id FROM organizations WHERE slug = ? AND id != ?", (slug, organization_id))
+                    if not cursor.fetchone():
+                        break
+                    slug = f"{base_slug}-{counter}"
+                    counter += 1
+                updates.append("slug = ?")
+                params.append(slug)
+            
+            if description is not None:
+                updates.append("description = ?")
+                params.append(description)
+            
+            if not updates:
+                return False
+            
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(organization_id)
+            
+            cursor.execute(f"""
+                UPDATE organizations 
+                SET {', '.join(updates)}
+                WHERE id = ?
+            """, params)
+            conn.commit()
+            logger.info(f"Updated organization {organization_id}")
+            return cursor.rowcount > 0
+        finally:
+            self.adapter.close(conn)
+    
+    def delete_organization(self, organization_id: int) -> bool:
+        """Delete an organization (cascades to teams, roles, members)."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM organizations WHERE id = ?", (organization_id,))
+            conn.commit()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"Deleted organization {organization_id}")
+            return deleted
+        finally:
+            self.adapter.close(conn)
+    
+    def add_organization_member(
+        self,
+        organization_id: int,
+        user_id: int,
+        role_id: Optional[int] = None
+    ) -> int:
+        """Add a member to an organization and return the membership ID."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            membership_id = self._execute_insert(cursor, """
+                INSERT INTO organization_members (organization_id, user_id, role_id)
+                VALUES (?, ?, ?)
+            """, (organization_id, user_id, role_id))
+            conn.commit()
+            logger.info(f"Added user {user_id} to organization {organization_id}")
+            return membership_id
+        except Exception as e:
+            if "unique constraint" in str(e).lower() or "UNIQUE constraint" in str(e):
+                raise ValueError(f"User {user_id} is already a member of organization {organization_id}")
+            raise
+        finally:
+            self.adapter.close(conn)
+    
+    def list_organization_members(self, organization_id: int) -> List[Dict[str, Any]]:
+        """List all members of an organization."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM organization_members
+                WHERE organization_id = ?
+                ORDER BY joined_at DESC
+            """, (organization_id,))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            self.adapter.close(conn)
+    
+    def remove_organization_member(self, organization_id: int, user_id: int) -> bool:
+        """Remove a member from an organization."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM organization_members
+                WHERE organization_id = ? AND user_id = ?
+            """, (organization_id, user_id))
+            conn.commit()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"Removed user {user_id} from organization {organization_id}")
+            return deleted
+        finally:
+            self.adapter.close(conn)
+    
+    # ============================================================================
+    # Team Methods
+    # ============================================================================
+    
+    def create_team(
+        self,
+        organization_id: int,
+        name: str,
+        description: Optional[str] = None
+    ) -> int:
+        """Create a new team and return its ID."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            team_id = self._execute_insert(cursor, """
+                INSERT INTO teams (organization_id, name, description)
+                VALUES (?, ?, ?)
+            """, (organization_id, name, description))
+            conn.commit()
+            logger.info(f"Created team {team_id}: {name} in organization {organization_id}")
+            return team_id
+        finally:
+            self.adapter.close(conn)
+    
+    def get_team(self, team_id: int) -> Optional[Dict[str, Any]]:
+        """Get a team by ID."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM teams WHERE id = ?", (team_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+        finally:
+            self.adapter.close(conn)
+    
+    def list_teams(self, organization_id: int) -> List[Dict[str, Any]]:
+        """List all teams in an organization."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM teams
+                WHERE organization_id = ?
+                ORDER BY created_at DESC
+            """, (organization_id,))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            self.adapter.close(conn)
+    
+    def update_team(
+        self,
+        team_id: int,
+        name: Optional[str] = None,
+        description: Optional[str] = None
+    ) -> bool:
+        """Update a team."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            updates = []
+            params = []
+            
+            if name is not None:
+                updates.append("name = ?")
+                params.append(name)
+            
+            if description is not None:
+                updates.append("description = ?")
+                params.append(description)
+            
+            if not updates:
+                return False
+            
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(team_id)
+            
+            cursor.execute(f"""
+                UPDATE teams 
+                SET {', '.join(updates)}
+                WHERE id = ?
+            """, params)
+            conn.commit()
+            logger.info(f"Updated team {team_id}")
+            return cursor.rowcount > 0
+        finally:
+            self.adapter.close(conn)
+    
+    def delete_team(self, team_id: int) -> bool:
+        """Delete a team (cascades to team members)."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM teams WHERE id = ?", (team_id,))
+            conn.commit()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"Deleted team {team_id}")
+            return deleted
+        finally:
+            self.adapter.close(conn)
+    
+    def add_team_member(
+        self,
+        team_id: int,
+        user_id: int,
+        role_id: Optional[int] = None
+    ) -> int:
+        """Add a member to a team and return the membership ID."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            membership_id = self._execute_insert(cursor, """
+                INSERT INTO team_members (team_id, user_id, role_id)
+                VALUES (?, ?, ?)
+            """, (team_id, user_id, role_id))
+            conn.commit()
+            logger.info(f"Added user {user_id} to team {team_id}")
+            return membership_id
+        except Exception as e:
+            if "unique constraint" in str(e).lower() or "UNIQUE constraint" in str(e):
+                raise ValueError(f"User {user_id} is already a member of team {team_id}")
+            raise
+        finally:
+            self.adapter.close(conn)
+    
+    def list_team_members(self, team_id: int) -> List[Dict[str, Any]]:
+        """List all members of a team."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM team_members
+                WHERE team_id = ?
+                ORDER BY joined_at DESC
+            """, (team_id,))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            self.adapter.close(conn)
+    
+    def remove_team_member(self, team_id: int, user_id: int) -> bool:
+        """Remove a member from a team."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM team_members
+                WHERE team_id = ? AND user_id = ?
+            """, (team_id, user_id))
+            conn.commit()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"Removed user {user_id} from team {team_id}")
+            return deleted
+        finally:
+            self.adapter.close(conn)
+    
+    # ============================================================================
+    # Role Methods
+    # ============================================================================
+    
+    def create_role(
+        self,
+        organization_id: Optional[int],
+        name: str,
+        permissions: str
+    ) -> int:
+        """Create a new role and return its ID."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            role_id = self._execute_insert(cursor, """
+                INSERT INTO roles (organization_id, name, permissions)
+                VALUES (?, ?, ?)
+            """, (organization_id, name, permissions))
+            conn.commit()
+            logger.info(f"Created role {role_id}: {name} in organization {organization_id}")
+            return role_id
+        finally:
+            self.adapter.close(conn)
+    
+    def get_role(self, role_id: int) -> Optional[Dict[str, Any]]:
+        """Get a role by ID."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM roles WHERE id = ?", (role_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
+        finally:
+            self.adapter.close(conn)
+    
+    def list_roles(self, organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """List roles. If organization_id is provided, only return roles for that organization."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if organization_id is not None:
+                cursor.execute("""
+                    SELECT * FROM roles
+                    WHERE organization_id = ?
+                    ORDER BY created_at DESC
+                """, (organization_id,))
+            else:
+                cursor.execute("SELECT * FROM roles ORDER BY created_at DESC")
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            self.adapter.close(conn)
+    
+    def update_role(
+        self,
+        role_id: int,
+        name: Optional[str] = None,
+        permissions: Optional[str] = None
+    ) -> bool:
+        """Update a role."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            updates = []
+            params = []
+            
+            if name is not None:
+                updates.append("name = ?")
+                params.append(name)
+            
+            if permissions is not None:
+                updates.append("permissions = ?")
+                params.append(permissions)
+            
+            if not updates:
+                return False
+            
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(role_id)
+            
+            cursor.execute(f"""
+                UPDATE roles 
+                SET {', '.join(updates)}
+                WHERE id = ?
+            """, params)
+            conn.commit()
+            logger.info(f"Updated role {role_id}")
+            return cursor.rowcount > 0
+        finally:
+            self.adapter.close(conn)
+    
+    def delete_role(self, role_id: int) -> bool:
+        """Delete a role (sets role_id to NULL in memberships)."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM roles WHERE id = ?", (role_id,))
+            conn.commit()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"Deleted role {role_id}")
+            return deleted
+        finally:
+            self.adapter.close(conn)
+    
+    def get_user_organization_roles(self, user_id: int, organization_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all roles for a user in an organization.
+        Returns roles from organization membership.
+        
+        Args:
+            user_id: User ID
+            organization_id: Organization ID
+            
+        Returns:
+            List of role dictionaries
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT r.* FROM roles r
+                INNER JOIN organization_members om ON r.id = om.role_id
+                WHERE om.user_id = ? AND om.organization_id = ?
+            """, (user_id, organization_id))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            self.adapter.close(conn)
+    
+    def get_user_team_roles(self, user_id: int, team_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all roles for a user in a team.
+        Returns roles from team membership.
+        
+        Args:
+            user_id: User ID
+            team_id: Team ID
+            
+        Returns:
+            List of role dictionaries
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT r.* FROM roles r
+                INNER JOIN team_members tm ON r.id = tm.role_id
+                WHERE tm.user_id = ? AND tm.team_id = ?
+            """, (user_id, team_id))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            self.adapter.close(conn)
+    
+    def get_user_roles_in_organization(self, user_id: int, organization_id: int) -> List[Dict[str, Any]]:
+        """
+        Get all roles for a user in an organization, including:
+        - Direct organization roles
+        - Team roles (from teams in the organization)
+        
+        Args:
+            user_id: User ID
+            organization_id: Organization ID
+            
+        Returns:
+            List of role dictionaries (may include duplicates - caller should deduplicate)
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            # Get organization roles
+            cursor.execute("""
+                SELECT r.* FROM roles r
+                INNER JOIN organization_members om ON r.id = om.role_id
+                WHERE om.user_id = ? AND om.organization_id = ?
+            """, (user_id, organization_id))
+            org_roles = [dict(row) for row in cursor.fetchall()]
+            
+            # Get team roles from teams in this organization
+            cursor.execute("""
+                SELECT r.* FROM roles r
+                INNER JOIN team_members tm ON r.id = tm.role_id
+                INNER JOIN teams t ON tm.team_id = t.id
+                WHERE tm.user_id = ? AND t.organization_id = ?
+            """, (user_id, organization_id))
+            team_roles = [dict(row) for row in cursor.fetchall()]
+            
+            # Combine and return (may have duplicates)
+            return org_roles + team_roles
+        finally:
+            self.adapter.close(conn)
+    
+    def assign_role_to_organization_member(self, organization_id: int, user_id: int, role_id: Optional[int]) -> bool:
+        """
+        Assign a role to an organization member.
+        
+        Args:
+            organization_id: Organization ID
+            user_id: User ID
+            role_id: Role ID to assign (None to remove role)
+            
+        Returns:
+            True if successful
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE organization_members
+                SET role_id = ?
+                WHERE organization_id = ? AND user_id = ?
+            """, (role_id, organization_id, user_id))
+            conn.commit()
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.info(f"Assigned role {role_id} to user {user_id} in organization {organization_id}")
+            return updated
+        finally:
+            self.adapter.close(conn)
+    
+    def assign_role_to_team_member(self, team_id: int, user_id: int, role_id: Optional[int]) -> bool:
+        """
+        Assign a role to a team member.
+        
+        Args:
+            team_id: Team ID
+            user_id: User ID
+            role_id: Role ID to assign (None to remove role)
+            
+        Returns:
+            True if successful
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE team_members
+                SET role_id = ?
+                WHERE team_id = ? AND user_id = ?
+            """, (role_id, team_id, user_id))
+            conn.commit()
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.info(f"Assigned role {role_id} to user {user_id} in team {team_id}")
+            return updated
         finally:
             self.adapter.close(conn)
     
@@ -969,13 +1011,20 @@ class TodoDatabase:
         notes: Optional[str] = None,
         priority: Optional[str] = None,
         estimated_hours: Optional[float] = None,
-        due_date: Optional[datetime] = None
+        due_date: Optional[datetime] = None,
+        organization_id: Optional[int] = None
     ) -> int:
         """Create a new task and return its ID."""
         if priority is None:
             priority = "medium"
         if priority not in ["low", "medium", "high", "critical"]:
             raise ValueError(f"Invalid priority: {priority}. Must be one of: low, medium, high, critical")
+        
+        # Get organization_id from project if not provided
+        if organization_id is None and project_id is not None:
+            project = self.get_project(project_id)
+            if project:
+                organization_id = project.get("organization_id")
         
         # Convert due_date to ISO format string if provided
         due_date_str = None
@@ -989,9 +1038,9 @@ class TodoDatabase:
         try:
             cursor = conn.cursor()
             task_id = self._execute_insert(cursor, """
-                INSERT INTO tasks (title, task_type, task_instruction, verification_instruction, project_id, notes, priority, estimated_hours, due_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (title, task_type, task_instruction, verification_instruction, project_id, notes, priority, estimated_hours, due_date_str))
+                INSERT INTO tasks (title, task_type, task_instruction, verification_instruction, project_id, notes, priority, estimated_hours, due_date, organization_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (title, task_type, task_instruction, verification_instruction, project_id, notes, priority, estimated_hours, due_date_str, organization_id))
             
             # Record creation in history
             self._execute_insert(cursor, """
@@ -1123,12 +1172,25 @@ class TodoDatabase:
         finally:
             self.adapter.close(conn)
     
-    def get_task(self, task_id: int) -> Optional[Dict[str, Any]]:
-        """Get a task by ID."""
+    def get_task(self, task_id: int, organization_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get a task by ID.
+        
+        Args:
+            task_id: Task ID
+            organization_id: Optional organization ID for tenant isolation. If provided, 
+                           only returns task if it belongs to this organization.
+        
+        Returns:
+            Task dictionary if found and accessible, None otherwise
+        """
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+            if organization_id is not None:
+                cursor.execute("SELECT * FROM tasks WHERE id = ? AND organization_id = ?", (task_id, organization_id))
+            else:
+                cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
             row = cursor.fetchone()
             if row:
                 task = dict(row)
@@ -1305,7 +1367,9 @@ class TodoDatabase:
         completed_after: Optional[str] = None,
         completed_before: Optional[str] = None,
         # Advanced filtering: text search
-        search: Optional[str] = None
+        search: Optional[str] = None,
+        # Multi-tenancy: organization filtering
+        organization_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """Query tasks with filters including advanced date range and text search."""
         conn = self._get_connection()
@@ -1335,6 +1399,10 @@ class TodoDatabase:
             if project_id is not None:
                 conditions.append("t.project_id = ?")
                 params.append(project_id)
+            # Tenant isolation: filter by organization_id
+            if organization_id is not None:
+                conditions.append("t.organization_id = ?")
+                params.append(organization_id)
             if priority:
                 conditions.append("t.priority = ?")
                 params.append(priority)
@@ -1483,12 +1551,13 @@ class TodoDatabase:
         finally:
             self.adapter.close(conn)
     
-    def get_overdue_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_overdue_tasks(self, limit: int = 100, organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get tasks that are overdue (due_date < current time and task_status != 'complete').
         
         Args:
             limit: Maximum number of results to return
+            organization_id: Optional organization ID for tenant isolation
             
         Returns:
             List of overdue task dictionaries
@@ -1497,25 +1566,37 @@ class TodoDatabase:
         try:
             cursor = conn.cursor()
             # Get tasks where due_date is in the past and task is not complete
-            cursor.execute("""
-                SELECT * FROM tasks
-                WHERE due_date IS NOT NULL
-                    AND due_date < datetime('now')
-                    AND task_status != 'complete'
-                ORDER BY due_date ASC
-                LIMIT ?
-            """, (limit,))
+            if organization_id is not None:
+                cursor.execute("""
+                    SELECT * FROM tasks
+                    WHERE due_date IS NOT NULL
+                        AND due_date < datetime('now')
+                        AND task_status != 'complete'
+                        AND organization_id = ?
+                    ORDER BY due_date ASC
+                    LIMIT ?
+                """, (organization_id, limit))
+            else:
+                cursor.execute("""
+                    SELECT * FROM tasks
+                    WHERE due_date IS NOT NULL
+                        AND due_date < datetime('now')
+                        AND task_status != 'complete'
+                    ORDER BY due_date ASC
+                    LIMIT ?
+                """, (limit,))
             return [dict(row) for row in cursor.fetchall()]
         finally:
             self.adapter.close(conn)
     
-    def get_tasks_approaching_deadline(self, days_ahead: int = 3, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_tasks_approaching_deadline(self, days_ahead: int = 3, limit: int = 100, organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get tasks that are approaching their deadline.
         
         Args:
             days_ahead: Number of days ahead to look for approaching deadlines (default: 3)
             limit: Maximum number of results to return
+            organization_id: Optional organization ID for tenant isolation
             
         Returns:
             List of task dictionaries with approaching deadlines
@@ -1525,20 +1606,32 @@ class TodoDatabase:
             cursor = conn.cursor()
             # Get tasks where due_date is within the next N days and task is not complete
             # Use datetime() function to properly handle ISO format strings
-            cursor.execute("""
-                SELECT * FROM tasks
-                WHERE due_date IS NOT NULL
-                    AND datetime(due_date) >= datetime('now')
-                    AND datetime(due_date) <= datetime('now', '+' || ? || ' days')
-                    AND task_status != 'complete'
-                ORDER BY due_date ASC
-                LIMIT ?
-            """, (days_ahead, limit))
+            if organization_id is not None:
+                cursor.execute("""
+                    SELECT * FROM tasks
+                    WHERE due_date IS NOT NULL
+                        AND datetime(due_date) >= datetime('now')
+                        AND datetime(due_date) <= datetime('now', '+' || ? || ' days')
+                        AND task_status != 'complete'
+                        AND organization_id = ?
+                    ORDER BY due_date ASC
+                    LIMIT ?
+                """, (days_ahead, organization_id, limit))
+            else:
+                cursor.execute("""
+                    SELECT * FROM tasks
+                    WHERE due_date IS NOT NULL
+                        AND datetime(due_date) >= datetime('now')
+                        AND datetime(due_date) <= datetime('now', '+' || ? || ' days')
+                        AND task_status != 'complete'
+                    ORDER BY due_date ASC
+                    LIMIT ?
+                """, (days_ahead, limit))
             return [dict(row) for row in cursor.fetchall()]
         finally:
             self.adapter.close(conn)
     
-    def search_tasks(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def search_tasks(self, query: str, limit: int = 100, organization_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Search tasks using full-text search across title, task_instruction, and notes.
         Supports both SQLite (FTS5) and PostgreSQL (tsvector) backends.
@@ -1546,6 +1639,7 @@ class TodoDatabase:
         Args:
             query: Search query string
             limit: Maximum number of results to return
+            organization_id: Optional organization ID for tenant isolation
             
         Returns:
             List of task dictionaries ranked by relevance
@@ -1556,12 +1650,21 @@ class TodoDatabase:
             
             # If query is empty, return all tasks (fallback to regular query)
             if not query or not query.strip():
-                query_sql = self._normalize_sql("""
-                    SELECT * FROM tasks
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                """)
-                self._execute_with_logging(cursor, query_sql, (limit,))
+                if organization_id is not None:
+                    query_sql = self._normalize_sql("""
+                        SELECT * FROM tasks
+                        WHERE organization_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    """)
+                    self._execute_with_logging(cursor, query_sql, (organization_id, limit))
+                else:
+                    query_sql = self._normalize_sql("""
+                        SELECT * FROM tasks
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    """)
+                    self._execute_with_logging(cursor, query_sql, (limit,))
                 return [dict(row) for row in cursor.fetchall()]
             
             search_query = query.strip()
@@ -1570,17 +1673,31 @@ class TodoDatabase:
             if self.db_type == "postgresql":
                 # PostgreSQL uses tsvector with GIN index
                 # Use to_tsquery for proper query parsing
-                query_sql = """
-                    SELECT *
-                    FROM tasks
-                    WHERE fts_vector @@ to_tsquery('english', %s)
-                    ORDER BY ts_rank(fts_vector, to_tsquery('english', %s)) DESC, created_at DESC
-                    LIMIT %s
-                """
-                # Escape special characters for tsquery (replace spaces with & for AND, | for OR)
-                # For simplicity, join words with & to require all terms
-                tsquery = " & ".join(search_query.split())
-                self._execute_with_logging(cursor, query_sql, (tsquery, tsquery, limit))
+                if organization_id is not None:
+                    query_sql = """
+                        SELECT *
+                        FROM tasks
+                        WHERE fts_vector @@ to_tsquery('english', %s)
+                            AND organization_id = %s
+                        ORDER BY ts_rank(fts_vector, to_tsquery('english', %s)) DESC, created_at DESC
+                        LIMIT %s
+                    """
+                    # Escape special characters for tsquery (replace spaces with & for AND, | for OR)
+                    # For simplicity, join words with & to require all terms
+                    tsquery = " & ".join(search_query.split())
+                    self._execute_with_logging(cursor, query_sql, (tsquery, organization_id, tsquery, limit))
+                else:
+                    query_sql = """
+                        SELECT *
+                        FROM tasks
+                        WHERE fts_vector @@ to_tsquery('english', %s)
+                        ORDER BY ts_rank(fts_vector, to_tsquery('english', %s)) DESC, created_at DESC
+                        LIMIT %s
+                    """
+                    # Escape special characters for tsquery (replace spaces with & for AND, | for OR)
+                    # For simplicity, join words with & to require all terms
+                    tsquery = " & ".join(search_query.split())
+                    self._execute_with_logging(cursor, query_sql, (tsquery, tsquery, limit))
             else:
                 # SQLite uses FTS5
                 fts5_worked = False
@@ -1590,15 +1707,26 @@ class TodoDatabase:
                     # Join with tasks table to get full task data
                     # bm25() provides BM25 ranking (lower is better, so we order ASC)
                     # Note: In FTS5, MATCH must use the table name, not an alias
-                    query_sql = """
-                        SELECT t.*
-                        FROM tasks t
-                        JOIN tasks_fts ON t.id = tasks_fts.rowid
-                        WHERE tasks_fts MATCH ?
-                        ORDER BY bm25(tasks_fts) ASC, t.created_at DESC
-                        LIMIT ?
-                    """
-                    self._execute_with_logging(cursor, query_sql, (search_query, limit))
+                    if organization_id is not None:
+                        query_sql = """
+                            SELECT t.*
+                            FROM tasks t
+                            JOIN tasks_fts ON t.id = tasks_fts.rowid
+                            WHERE tasks_fts MATCH ? AND t.organization_id = ?
+                            ORDER BY bm25(tasks_fts) ASC, t.created_at DESC
+                            LIMIT ?
+                        """
+                        self._execute_with_logging(cursor, query_sql, (search_query, organization_id, limit))
+                    else:
+                        query_sql = """
+                            SELECT t.*
+                            FROM tasks t
+                            JOIN tasks_fts ON t.id = tasks_fts.rowid
+                            WHERE tasks_fts MATCH ?
+                            ORDER BY bm25(tasks_fts) ASC, t.created_at DESC
+                            LIMIT ?
+                        """
+                        self._execute_with_logging(cursor, query_sql, (search_query, limit))
                     # Check if FTS5 returned results - if not, fall back to LIKE
                     fts_results = cursor.fetchall()
                     if fts_results:
@@ -1620,8 +1748,12 @@ class TodoDatabase:
                     keywords = search_query.split()
                     if not keywords:
                         # Empty query, return empty results
-                        query_sql = "SELECT * FROM tasks WHERE 1=0 LIMIT ?"
-                        self._execute_with_logging(cursor, query_sql, (limit,))
+                        if organization_id is not None:
+                            query_sql = "SELECT * FROM tasks WHERE organization_id = ? LIMIT ?"
+                            self._execute_with_logging(cursor, query_sql, (organization_id, limit))
+                        else:
+                            query_sql = "SELECT * FROM tasks WHERE 1=0 LIMIT ?"
+                            self._execute_with_logging(cursor, query_sql, (limit,))
                     else:
                         # Build LIKE conditions for each keyword (all keywords must match)
                         like_conditions = []
@@ -1630,6 +1762,12 @@ class TodoDatabase:
                             pattern = f"%{keyword}%"
                             like_conditions.append(f"(title LIKE ? OR task_instruction LIKE ? OR notes LIKE ?)")
                             params.extend([pattern, pattern, pattern])
+                        
+                        # Add organization_id filter if provided
+                        if organization_id is not None:
+                            like_conditions.append("organization_id = ?")
+                            params.append(organization_id)
+                        
                         query_sql = f"""
                             SELECT DISTINCT * FROM tasks
                             WHERE {' AND '.join(like_conditions)}
@@ -1654,15 +1792,27 @@ class TodoDatabase:
             try:
                 cursor = conn.cursor()
                 search_pattern = f"%{query.strip()}%"
-                query_sql = self._normalize_sql("""
-                    SELECT * FROM tasks
-                    WHERE title LIKE ? 
-                       OR task_instruction LIKE ?
-                       OR notes LIKE ?
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                """)
-                self._execute_with_logging(cursor, query_sql, (search_pattern, search_pattern, search_pattern, limit))
+                if organization_id is not None:
+                    query_sql = self._normalize_sql("""
+                        SELECT * FROM tasks
+                        WHERE (title LIKE ? 
+                           OR task_instruction LIKE ?
+                           OR notes LIKE ?)
+                           AND organization_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    """)
+                    self._execute_with_logging(cursor, query_sql, (search_pattern, search_pattern, search_pattern, organization_id, limit))
+                else:
+                    query_sql = self._normalize_sql("""
+                        SELECT * FROM tasks
+                        WHERE title LIKE ? 
+                           OR task_instruction LIKE ?
+                           OR notes LIKE ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    """)
+                    self._execute_with_logging(cursor, query_sql, (search_pattern, search_pattern, search_pattern, limit))
                 return [dict(row) for row in cursor.fetchall()]
             except Exception as fallback_error:
                 logger.error(f"LIKE search also failed: {fallback_error}")
@@ -1670,17 +1820,35 @@ class TodoDatabase:
         finally:
             self.adapter.close(conn)
     
-    def lock_task(self, task_id: int, agent_id: str) -> bool:
-        """Lock a task for an agent (set to in_progress). Returns True if successful."""
+    def lock_task(self, task_id: int, agent_id: str, organization_id: Optional[int] = None) -> bool:
+        """
+        Lock a task for an agent (set to in_progress). Returns True if successful.
+        
+        Args:
+            task_id: Task ID
+            agent_id: Agent ID
+            organization_id: Optional organization ID for tenant isolation validation
+        
+        Returns:
+            True if task was successfully locked, False otherwise
+        """
         if not agent_id:
             raise ValueError("agent_id is required for locking tasks")
         
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            # Get current status for history
-            cursor.execute("SELECT task_status, assigned_agent FROM tasks WHERE id = ?", (task_id,))
-            current = cursor.fetchone()
+            # Get current status for history and verify tenant isolation
+            if organization_id is not None:
+                cursor.execute("SELECT task_status, assigned_agent, organization_id FROM tasks WHERE id = ?", (task_id,))
+                current = cursor.fetchone()
+                if not current:
+                    raise ValueError(f"Task {task_id} not found")
+                if current["organization_id"] != organization_id:
+                    raise ValueError(f"Task {task_id} does not belong to your organization")
+            else:
+                cursor.execute("SELECT task_status, assigned_agent FROM tasks WHERE id = ?", (task_id,))
+                current = cursor.fetchone()
             old_status = current["task_status"] if current else None
             
             # Only lock if task is available OR in needs_verification state (complete but unverified)
@@ -1712,19 +1880,34 @@ class TodoDatabase:
         finally:
             self.adapter.close(conn)
     
-    def unlock_task(self, task_id: int, agent_id: str):
-        """Unlock a task (set back to available)."""
+    def unlock_task(self, task_id: int, agent_id: str, organization_id: Optional[int] = None):
+        """
+        Unlock a task (set back to available).
+        
+        Args:
+            task_id: Task ID
+            agent_id: Agent ID
+            organization_id: Optional organization ID for tenant isolation validation
+        """
         if not agent_id:
             raise ValueError("agent_id is required for unlocking tasks")
         
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            # Get current assigned agent for verification
-            cursor.execute("SELECT assigned_agent, task_status FROM tasks WHERE id = ?", (task_id,))
-            current = cursor.fetchone()
-            if not current:
-                raise ValueError(f"Task {task_id} not found")
+            # Get current assigned agent for verification and verify tenant isolation
+            if organization_id is not None:
+                cursor.execute("SELECT assigned_agent, task_status, organization_id FROM tasks WHERE id = ?", (task_id,))
+                current = cursor.fetchone()
+                if not current:
+                    raise ValueError(f"Task {task_id} not found")
+                if current["organization_id"] != organization_id:
+                    raise ValueError(f"Task {task_id} does not belong to your organization")
+            else:
+                cursor.execute("SELECT assigned_agent, task_status FROM tasks WHERE id = ?", (task_id,))
+                current = cursor.fetchone()
+                if not current:
+                    raise ValueError(f"Task {task_id} not found")
             
             old_status = current["task_status"]
             old_agent = current["assigned_agent"]
@@ -1846,8 +2029,17 @@ class TodoDatabase:
         
         return unlocked_count
     
-    def complete_task(self, task_id: int, agent_id: str, notes: Optional[str] = None, actual_hours: Optional[float] = None):
-        """Mark a task as complete and auto-complete parent tasks if all subtasks are done."""
+    def complete_task(self, task_id: int, agent_id: str, notes: Optional[str] = None, actual_hours: Optional[float] = None, organization_id: Optional[int] = None):
+        """
+        Mark a task as complete and auto-complete parent tasks if all subtasks are done.
+        
+        Args:
+            task_id: Task ID
+            agent_id: Agent ID
+            notes: Optional completion notes
+            actual_hours: Optional actual hours spent
+            organization_id: Optional organization ID for tenant isolation validation
+        """
         if not agent_id:
             raise ValueError("agent_id is required for completing tasks")
         
@@ -1855,8 +2047,17 @@ class TodoDatabase:
         try:
             cursor = conn.cursor()
             # Get current status, estimated_hours, and started_at for history and time calculation
-            cursor.execute("SELECT task_status, estimated_hours, started_at FROM tasks WHERE id = ?", (task_id,))
-            current = cursor.fetchone()
+            # Also verify tenant isolation
+            if organization_id is not None:
+                cursor.execute("SELECT task_status, estimated_hours, started_at, organization_id FROM tasks WHERE id = ?", (task_id,))
+                current = cursor.fetchone()
+                if not current:
+                    raise ValueError(f"Task {task_id} not found")
+                if current["organization_id"] != organization_id:
+                    raise ValueError(f"Task {task_id} does not belong to your organization")
+            else:
+                cursor.execute("SELECT task_status, estimated_hours, started_at FROM tasks WHERE id = ?", (task_id,))
+                current = cursor.fetchone()
             old_status = current["task_status"] if current else None
             estimated_hours = current["estimated_hours"] if current else None
             started_at = current["started_at"] if current else None
@@ -3400,23 +3601,34 @@ class TodoDatabase:
         self,
         agent_type: str,
         project_id: Optional[int] = None,
-        limit: int = 10
+        limit: int = 10,
+        organization_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Get available tasks for an agent type.
         
         - 'breakdown': Returns abstract/epic tasks that need to be broken down
         - 'implementation': Returns concrete tasks ready for implementation
+        
+        Args:
+            agent_type: 'breakdown' or 'implementation'
+            project_id: Optional project ID to filter tasks
+            limit: Maximum number of tasks to return
+            organization_id: Optional organization ID to filter tasks (for multi-tenancy)
         """
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             
+            # Build filters
             project_filter = "AND t.project_id = ?" if project_id is not None else ""
+            org_filter = "AND t.organization_id = ?" if organization_id is not None else ""
             params = []
             
             if project_id is not None:
                 params.append(project_id)
+            if organization_id is not None:
+                params.append(organization_id)
             
             if agent_type == "breakdown":
                 # Abstract or epic tasks that are available and have no blocking tasks
@@ -3428,6 +3640,7 @@ class TodoDatabase:
                         AND t.task_type IN ('abstract', 'epic')
                         AND tr.id IS NULL
                         {project_filter}
+                        {org_filter}
                     ORDER BY t.created_at ASC
                     LIMIT ?
                 """, params + [limit])
@@ -3445,11 +3658,8 @@ class TodoDatabase:
                     )
                         AND tr.id IS NULL
                         {project_filter}
+                        {org_filter}
                     ORDER BY 
-                        CASE 
-                            WHEN t.task_status = 'complete' AND t.verification_status = 'unverified' THEN 0
-                            ELSE 1
-                        END,
                         t.created_at ASC
                     LIMIT ?
                 """, params + [limit])
@@ -5060,11 +5270,26 @@ class TodoDatabase:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            query = self._normalize_sql("""
-                SELECT id, user_id, session_token, expires_at, created_at, last_used_at
-                FROM user_sessions
-                WHERE session_token = ? AND expires_at > CURRENT_TIMESTAMP
-            """)
+            # Check if organization_id column exists
+            try:
+                cursor.execute("SELECT organization_id FROM user_sessions LIMIT 1")
+                has_org_column = True
+            except (sqlite3.OperationalError, Exception):
+                has_org_column = False
+            
+            if has_org_column:
+                query = self._normalize_sql("""
+                    SELECT id, user_id, session_token, expires_at, created_at, last_used_at, organization_id
+                    FROM user_sessions
+                    WHERE session_token = ? AND expires_at > CURRENT_TIMESTAMP
+                """)
+            else:
+                query = self._normalize_sql("""
+                    SELECT id, user_id, session_token, expires_at, created_at, last_used_at
+                    FROM user_sessions
+                    WHERE session_token = ? AND expires_at > CURRENT_TIMESTAMP
+                """)
+            
             self._execute_with_logging(cursor, query, (session_token,))
             row = cursor.fetchone()
             
@@ -5076,17 +5301,24 @@ class TodoDatabase:
                 UPDATE user_sessions
                 SET last_used_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            """, (row[0],))
+            """, (row["id"] if hasattr(row, 'keys') else row[0],))
             conn.commit()
             
-            return {
-                "id": row[0],
-                "user_id": row[1],
-                "session_token": row[2],
-                "expires_at": row[3],
-                "created_at": row[4],
-                "last_used_at": row[5]
+            # Build result dict
+            result = {
+                "id": row["id"] if hasattr(row, 'keys') else row[0],
+                "user_id": row["user_id"] if hasattr(row, 'keys') else row[1],
+                "session_token": row["session_token"] if hasattr(row, 'keys') else row[2],
+                "expires_at": row["expires_at"] if hasattr(row, 'keys') else row[3],
+                "created_at": row["created_at"] if hasattr(row, 'keys') else row[4],
+                "last_used_at": row["last_used_at"] if hasattr(row, 'keys') else row[5]
             }
+            
+            # Add organization_id if available
+            if has_org_column:
+                result["organization_id"] = row["organization_id"] if hasattr(row, 'keys') else (row[6] if len(row) > 6 else None)
+            
+            return result
         finally:
             self.adapter.close(conn)
     
@@ -5143,13 +5375,14 @@ class TodoDatabase:
         """Generate a secure random API key."""
         return secrets.token_urlsafe(32)  # 32 bytes = 43 characters base64url
 
-    def create_api_key(self, project_id: int, name: str) -> Tuple[int, str]:
+    def create_api_key(self, project_id: int, name: str, organization_id: Optional[int] = None) -> Tuple[int, str]:
         """
         Create a new API key for a project.
         
         Args:
             project_id: Project ID
             name: User-friendly name for the key
+            organization_id: Organization ID (required for multi-tenancy)
             
         Returns:
             Tuple of (key_id, full_api_key)
@@ -5159,6 +5392,12 @@ class TodoDatabase:
         if not project:
             raise ValueError(f"Project {project_id} not found")
         
+        # Get organization_id from project if not provided
+        if organization_id is None:
+            organization_id = project.get("organization_id")
+            if organization_id is None:
+                raise ValueError("organization_id is required. Either provide it directly or ensure the project has an organization_id.")
+        
         # Generate key
         full_key = self._generate_api_key()
         key_hash = self._hash_api_key(full_key)
@@ -5167,12 +5406,26 @@ class TodoDatabase:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            key_id = self._execute_insert(cursor, """
-                INSERT INTO api_keys (project_id, key_hash, key_prefix, name)
-                VALUES (?, ?, ?, ?)
-            """, (project_id, key_hash, key_prefix, name))
+            # Check if organization_id column exists (for backward compatibility)
+            try:
+                cursor.execute("SELECT organization_id FROM api_keys LIMIT 1")
+                has_org_column = True
+            except (sqlite3.OperationalError, Exception):
+                has_org_column = False
+            
+            if has_org_column:
+                key_id = self._execute_insert(cursor, """
+                    INSERT INTO api_keys (project_id, organization_id, key_hash, key_prefix, name)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (project_id, organization_id, key_hash, key_prefix, name))
+            else:
+                # Fallback for databases without organization_id column
+                key_id = self._execute_insert(cursor, """
+                    INSERT INTO api_keys (project_id, key_hash, key_prefix, name)
+                    VALUES (?, ?, ?, ?)
+                """, (project_id, key_hash, key_prefix, name))
             conn.commit()
-            logger.info(f"Created API key {key_id} for project {project_id}")
+            logger.info(f"Created API key {key_id} for project {project_id}, organization {organization_id}")
             return key_id, full_key
         finally:
             self.adapter.close(conn)
@@ -5191,16 +5444,23 @@ class TodoDatabase:
         try:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, project_id, key_hash, key_prefix, name, enabled,
+                SELECT id, project_id, organization_id, key_hash, key_prefix, name, enabled,
                        created_at, updated_at, last_used_at
                 FROM api_keys
                 WHERE key_hash = ?
             """, (key_hash,))
             row = cursor.fetchone()
             if row:
+                # Both SQLite Row and PostgreSQL RealDictRow support dict-like access
+                # organization_id may not exist in older databases
+                org_id = None
+                if "organization_id" in row.keys():
+                    org_id = row["organization_id"]
+                
                 return {
                     "id": row["id"],
                     "project_id": row["project_id"],
+                    "organization_id": org_id,
                     "key_hash": row["key_hash"],
                     "key_prefix": row["key_prefix"],
                     "name": row["name"],

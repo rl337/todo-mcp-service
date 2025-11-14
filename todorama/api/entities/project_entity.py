@@ -6,6 +6,11 @@ from typing import Dict, Any, List, Optional
 
 from todorama.adapters.http_framework import HTTPFrameworkAdapter
 from todorama.api.entities.base_entity import BaseEntity
+from todorama.exceptions import (
+    ProjectNotFoundError,
+    ValidationError,
+    DuplicateError
+)
 
 # Initialize adapter
 http_adapter = HTTPFrameworkAdapter()
@@ -37,11 +42,11 @@ class ProjectEntity(BaseEntity):
                 project_data = kwargs
             
             # Convert dict to ProjectCreate model - catch validation errors
-            from pydantic import ValidationError
+            from pydantic import ValidationError as PydanticValidationError
             try:
                 project_create = ProjectCreate(**project_data)
-            except ValidationError as e:
-                # Convert Pydantic validation errors to 422 HTTPException
+            except PydanticValidationError as e:
+                # Convert Pydantic validation errors to standard ValidationError
                 errors = []
                 for error in e.errors():
                     errors.append({
@@ -49,19 +54,28 @@ class ProjectEntity(BaseEntity):
                         "msg": error["msg"],
                         "type": error["type"]
                     })
-                raise HTTPException(
-                    status_code=422,
-                    detail=errors  # FastAPI format: list of error objects
+                raise ValidationError(
+                    message="Validation failed",
+                    context={"errors": errors}
                 )
             
             # Use ProjectService instead of calling database directly
             created = self.service.create_project(project_create)
             return created
-        except HTTPException:
+        except (HTTPException, ValidationError, DuplicateError):
             raise
         except ValueError as e:
             # ValueError from service indicates duplicate name or validation error
-            raise HTTPException(status_code=409, detail=str(e))
+            error_msg = str(e)
+            if "already exists" in error_msg.lower() or "duplicate" in error_msg.lower():
+                raise DuplicateError(
+                    resource_type="Project",
+                    field="name",
+                    value=project_data.get("name", "unknown"),
+                    message=error_msg
+                )
+            else:
+                raise ValidationError(message=error_msg)
         except Exception as e:
             self._handle_error(e, "Failed to create project")
     
@@ -74,7 +88,7 @@ class ProjectEntity(BaseEntity):
         try:
             project = self.service.get_project(project_id)
             if not project:
-                raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+                raise ProjectNotFoundError(project_id)
             return project
         except Exception as e:
             self._handle_error(e, "Failed to get project")
@@ -88,7 +102,7 @@ class ProjectEntity(BaseEntity):
         try:
             project = self.service.get_project_by_name(project_name)
             if not project:
-                raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found")
+                raise ProjectNotFoundError(project_name)
             return project
         except Exception as e:
             self._handle_error(e, "Failed to get project by name")

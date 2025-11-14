@@ -22,8 +22,8 @@ RUN uv export --format requirements.txt > /tmp/requirements.txt && \
     pip install --no-cache-dir -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
 
-# Copy application code
-COPY src/ .
+# Copy application code (todorama package is at top level)
+COPY todorama/ ./todorama/
 
 # Create data directory
 RUN mkdir -p /app/data /app/backups && \
@@ -48,5 +48,5 @@ ENV TODO_BACKUPS_DIR=/app/backups
 ENV TODO_SERVICE_PORT=8004
 ENV TODO_BACKUP_INTERVAL_HOURS=24
 
-# Run the service
-CMD ["python", "main.py"]
+# Run the service using the new entry point
+CMD ["python", "-m", "todorama", "server"]

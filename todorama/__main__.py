@@ -161,6 +161,30 @@ def main():
     except ImportError as e:
         logger.warning(f"MigrateCommand could not be imported: {e}")
     
+    try:
+        from todorama.commands.keys import KeyManagementCommand
+        register_command(KeyManagementCommand)
+    except ImportError as e:
+        logger.warning(f"KeyManagementCommand could not be imported: {e}")
+    
+    try:
+        from todorama.commands.analyze import AnalyzeCommand
+        register_command(AnalyzeCommand)
+    except ImportError as e:
+        logger.warning(f"AnalyzeCommand could not be imported: {e}")
+    
+    try:
+        from todorama.commands.audit import AuditCommand
+        register_command(AuditCommand)
+    except ImportError as e:
+        logger.warning(f"AuditCommand could not be imported: {e}")
+    
+    try:
+        from todorama.commands.verify import VerifyCommand
+        register_command(VerifyCommand)
+    except ImportError as e:
+        logger.warning(f"VerifyCommand could not be imported: {e}")
+    
     # Create subparsers for each command
     for name, cmd_class in _COMMANDS.items():
         subparser = subparsers.add_parser(

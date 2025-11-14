@@ -24,6 +24,12 @@ from todorama.monitoring import get_metrics, get_health_info, get_request_id
 # Import routes
 from todorama.api.command_router import router as command_router
 from todorama.api.routes.mcp import router as mcp_router
+from todorama.api.routes.tasks import router as tasks_router
+from todorama.api.routes.templates import router as templates_router
+from todorama.api.routes.projects import router as projects_router
+from todorama.api.routes.tags import router as tags_router
+from todorama.api.routes.admin import router as admin_router
+from todorama.api.routes.tenancy import router as tenancy_router
 from todorama.api.all_routes import router as all_routes_router
 from todorama.models import RelationshipCreate
 
@@ -206,6 +212,12 @@ def create_app():
     # Include all_routes FIRST so specific routes like /api/Task/import/json are handled before command router
     # Use adapter's include_router to handle adapter-wrapped routers
     app_adapter.include_router(all_routes_router)
+    app_adapter.include_router(tasks_router)
+    app_adapter.include_router(templates_router)
+    app_adapter.include_router(projects_router)
+    app_adapter.include_router(tags_router)
+    app_adapter.include_router(admin_router)
+    app_adapter.include_router(tenancy_router)
     app_adapter.include_router(command_router)
     app_adapter.include_router(mcp_router)
     

@@ -1,9 +1,24 @@
 #!/bin/bash
 # Enhanced cursor-agent loop that properly uses MCP functions for task management
 # Exits on non-zero return code to allow for error handling and monitoring
+# 
 # Usage: ./cursor-agent-loop-improved.sh [LOOP_COUNT]
 #   If LOOP_COUNT is provided (e.g., 10), the script will loop that many times
 #   If no argument is provided, the script will loop indefinitely
+#
+# Agent Modes (set via CURSOR_AGENT_MODE environment variable):
+#   - normal (default): Standard task work - picks up and completes tasks
+#   - precommit: Fix pre-commit test failures (also auto-triggered by .pre-commit-failed semaphore)
+#   - refactor-planner: Analyzes codebase and creates refactoring tasks (does not make changes)
+#   - project-cleanup: Analyzes project and creates cleanup tasks for docs/scripts (does not make changes)
+#
+# Environment Variables:
+#   CURSOR_AGENT_ID: Agent identifier (default: cursor-${HOSTNAME}-cli)
+#   CURSOR_PROJECT_ID: Project ID to filter tasks (optional)
+#   CURSOR_AGENT_TYPE: Agent type - 'implementation' or 'breakdown' (default: implementation)
+#   CURSOR_AGENT_MODE: Agent mode - 'normal', 'precommit', 'refactor-planner', 'project-cleanup' (default: normal)
+#   CURSOR_SLEEP_INTERVAL: Sleep time between iterations in seconds (default: 60)
+#   AGENT_TIMEOUT: Maximum time for agent execution in seconds (default: 3600)
 
 set -euo pipefail
 
@@ -13,6 +28,7 @@ HOSTNAME=$(hostname)
 AGENT_ID="${CURSOR_AGENT_ID:-cursor-${HOSTNAME}-cli}"
 PROJECT_ID="${CURSOR_PROJECT_ID:-}"
 AGENT_TYPE="${CURSOR_AGENT_TYPE:-implementation}"
+AGENT_MODE="${CURSOR_AGENT_MODE:-normal}"  # normal, precommit, refactor-planner, project-cleanup
 SLEEP_INTERVAL="${CURSOR_SLEEP_INTERVAL:-60}"
 TODO_SERVICE_URL="${TODO_SERVICE_URL:-http://localhost:8004}"
 
@@ -61,49 +77,24 @@ unlock_task() {
     # cursor-agent should handle this via MCP if it has access
 }
 
-# Main loop
-log "Starting cursor-agent loop"
-log "Agent ID: $AGENT_ID"
-log "Project ID: ${PROJECT_ID:-all projects}"
-log "Agent Type: $AGENT_TYPE"
-log "Sleep interval: ${SLEEP_INTERVAL}s"
-if [ -n "$MAX_LOOPS" ]; then
-    log "Maximum loops: $MAX_LOOPS"
-else
-    log "Running indefinitely (no loop limit)"
-fi
-
-TASK_ID=""
-LOOP_COUNT=0
-
-while true; do
-    LOOP_COUNT=$((LOOP_COUNT + 1))
-    TASK_ID=""
+# Function to run pre-commit fix mode
+run_precommit_fix_mode() {
+    local semaphore_file=".pre-commit-failed"
     
-    # Check if we've reached the maximum loop count
-    if [ -n "$MAX_LOOPS" ] && [ "$LOOP_COUNT" -gt "$MAX_LOOPS" ]; then
-        log "Reached maximum loop count of ${MAX_LOOPS}. Exiting."
-        break
-    fi
+    log_warning "=========================================="
+    log_warning "PRE-COMMIT FAILURE SEMAPHORE DETECTED!"
+    log_warning "=========================================="
+    log_warning "Semaphore file: $semaphore_file"
+    log_warning "Previous commit attempt failed tests."
+    log_warning "Agent MUST fix issues and commit BEFORE picking up any tasks."
+    log_warning "=========================================="
     
-    log "Starting task iteration #${LOOP_COUNT}${MAX_LOOPS:+ / ${MAX_LOOPS}}..."
+    # Read semaphore file content for context
+    local semaphore_content
+    semaphore_content=$(cat "$semaphore_file" 2>/dev/null || echo "Semaphore file exists but content unavailable")
     
-    # Check for pre-commit failure semaphore (if agent is the only one working in this checkout)
-    SEMAPHORE_FILE=".pre-commit-failed"
-    if [ -f "$SEMAPHORE_FILE" ]; then
-        log_warning "=========================================="
-        log_warning "PRE-COMMIT FAILURE SEMAPHORE DETECTED!"
-        log_warning "=========================================="
-        log_warning "Semaphore file: $SEMAPHORE_FILE"
-        log_warning "Previous commit attempt failed tests."
-        log_warning "Agent MUST fix issues and commit BEFORE picking up any tasks."
-        log_warning "=========================================="
-        
-        # Read semaphore file content for context
-        SEMAPHORE_CONTENT=$(cat "$SEMAPHORE_FILE" 2>/dev/null || echo "Semaphore file exists but content unavailable")
-        
-        # Update agent prompt to prioritize fixing pre-commit issues
-        AGENT_PROMPT="
+    # Update agent prompt to prioritize fixing pre-commit issues
+    local agent_prompt="
         Your agent-id is $AGENT_ID
         
         🚨🚨🚨 CRITICAL PRIORITY: PRE-COMMIT CHECKS FAILED 🚨🚨🚨
@@ -113,7 +104,7 @@ while true; do
         successfully before doing ANY other work, including picking up new tasks.
         
         SEMAPHORE FILE CONTENT:
-        ${SEMAPHORE_CONTENT}
+        ${semaphore_content}
         
         MANDATORY WORKFLOW (DO NOT SKIP ANY STEP):
         
@@ -188,55 +179,44 @@ while true; do
         
         Once the semaphore file is removed, you may proceed with normal task work on the next iteration.
         Use the MCP TODO service tools directly with the 'todo-' prefix if needed for task updates."
+    
+    # Run agent to fix pre-commit issues with strict timeout
+    log "Running agent to fix pre-commit failures (timeout: ${AGENT_TIMEOUT}s)..."
+    if timeout "$AGENT_TIMEOUT" cursor-agent agent \
+        -p \
+        --model=auto \
+        --stream-partial-output \
+        --force \
+        --approve-mcps \
+        "${agent_prompt}" \
+        --output-format stream-json; then
         
-        # Run agent to fix pre-commit issues with strict timeout
-        log "Running agent to fix pre-commit failures (timeout: ${AGENT_TIMEOUT}s)..."
-        if timeout "$AGENT_TIMEOUT" cursor-agent agent \
-            -p \
-            --model=auto \
-            --stream-partial-output \
-            --force \
-            --approve-mcps \
-            "${AGENT_PROMPT}" \
-            --output-format stream-json; then
-            
-            # Check if semaphore was removed (tests fixed and committed)
-            if [ ! -f "$SEMAPHORE_FILE" ]; then
-                log_success "✅ Pre-commit issues fixed and committed. Semaphore removed."
-                log_success "✅ Agent can now proceed with normal task work."
-            else
-                log_warning "⚠️  Semaphore still exists - tests may not be fully fixed yet."
-                log_warning "⚠️  Agent will retry on next iteration."
-            fi
-            
-            # Continue to next iteration (will check for tasks normally if semaphore is gone)
-            if [ -n "$MAX_LOOPS" ] && [ "$LOOP_COUNT" -ge "$MAX_LOOPS" ]; then
-                log "Completed ${LOOP_COUNT} iteration(s). Exiting."
-                break
-            fi
-            
-            log "Sleeping ${SLEEP_INTERVAL}s before next iteration..."
-            sleep "$SLEEP_INTERVAL"
-            continue
+        # Check if semaphore was removed (tests fixed and committed)
+        if [ ! -f "$semaphore_file" ]; then
+            log_success "✅ Pre-commit issues fixed and committed. Semaphore removed."
+            log_success "✅ Agent can now proceed with normal task work."
+            return 0
         else
-            EXIT_CODE=$?
-            if [ $EXIT_CODE -eq 124 ]; then
-                log_error "❌ Agent TIMED OUT after ${AGENT_TIMEOUT}s while fixing pre-commit issues"
-                log_error "❌ This may indicate the agent got stuck. Killing any remaining processes..."
-                pkill -9 -f "cursor-agent.*pre-commit" 2>/dev/null || true
-            else
-                log_error "❌ Failed to fix pre-commit issues. Exit code: $EXIT_CODE"
-            fi
-            log_error "❌ Agent will retry on next iteration."
-            # Continue loop - will retry on next iteration
-            sleep "$SLEEP_INTERVAL"
-            continue
+            log_warning "⚠️  Semaphore still exists - tests may not be fully fixed yet."
+            log_warning "⚠️  Agent will retry on next iteration."
+            return 1
         fi
     else
-        # No semaphore file - normal workflow can proceed
-        log "✅ No semaphore file detected - proceeding with normal task work"
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            log_error "❌ Agent TIMED OUT after ${AGENT_TIMEOUT}s while fixing pre-commit issues"
+            log_error "❌ This may indicate the agent got stuck. Killing any remaining processes..."
+            pkill -9 -f "cursor-agent.*pre-commit" 2>/dev/null || true
+        else
+            log_error "❌ Failed to fix pre-commit issues. Exit code: $exit_code"
+        fi
+        log_error "❌ Agent will retry on next iteration."
+        return 1
     fi
+}
 
+# Function to run normal task work mode
+run_normal_task_mode() {
     # Check MCP tools availability with timeout
     if ! timeout "$MCP_TIMEOUT" cursor-agent mcp list 2>/dev/null | grep -q "todo"; then
         log_warning "MCP tools check failed or timed out (${MCP_TIMEOUT}s), continuing anyway..."
@@ -246,7 +226,7 @@ while true; do
         log_warning "MCP tools list failed or timed out (${MCP_TIMEOUT}s), continuing anyway..."
     fi
     
-    AGENT_PROMPT="
+    local agent_prompt="
         Your agent-id is $AGENT_ID
         Use the MCP TODO service tools directly (available through Cursor's MCP integration) to work on tasks. DO NOT create scripts or make HTTP requests - use the MCP tools directly. Follow this workflow:
         
@@ -332,39 +312,350 @@ while true; do
         --stream-partial-output \
         --force \
         --approve-mcps \
-        "${AGENT_PROMPT}" \
+        "${agent_prompt}" \
         --output-format stream-json; then
         
         log_success "Task completed successfully"
-        
-        # Check if we've reached the maximum loop count before sleeping
-        if [ -n "$MAX_LOOPS" ] && [ "$LOOP_COUNT" -ge "$MAX_LOOPS" ]; then
-            log "Completed ${LOOP_COUNT} iteration(s). Exiting."
-            break
-        fi
-        
-        log "Sleeping ${SLEEP_INTERVAL}s before next iteration..."
-        sleep "$SLEEP_INTERVAL"
+        return 0
     else
-        EXIT_CODE=$?
-        if [ $EXIT_CODE -eq 124 ]; then
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
             log_error "❌ Agent TIMED OUT after ${AGENT_TIMEOUT}s during task work"
             log_error "❌ This may indicate the agent got stuck. Killing any remaining processes..."
             pkill -9 -f "cursor-agent.*agent.*-p" 2>/dev/null || true
-            # Continue loop - don't exit on timeout, allow retry
         else
-            log_error "cursor-agent returned non-zero exit code: $EXIT_CODE"
+            log_error "cursor-agent returned non-zero exit code: $exit_code"
         fi
-        
-        # If we had a task reserved, try to unlock it
-        if [ -n "$TASK_ID" ]; then
-            unlock_task "$TASK_ID"
-        fi
-        
-        # Don't exit on error - continue loop to allow retry
-        log_warning "Will retry on next iteration..."
-        sleep "$SLEEP_INTERVAL"
+        return 1
     fi
+}
+
+# Function to run refactor planner mode
+run_refactor_planner_mode() {
+    log "🔍 Running REFACTOR PLANNER mode..."
+    
+    local agent_prompt="
+        Your agent-id is $AGENT_ID
+        You are operating in REFACTOR PLANNER mode. Your job is to analyze the codebase and create refactoring tasks.
+        
+        IMPORTANT: The MCP tools are already available to you. Use them directly with the 'todo-' prefix:
+          - todo-get_recent_completions() - Get the last completed task
+          - todo-get_task_context() - Get full task context including project info
+          - todo-create_task() - Create new refactoring tasks
+          - todo-query_tasks() - Query existing tasks
+        
+        WORKFLOW:
+        
+        STEP 1: Get the last completed task
+          - Call todo-get_recent_completions(limit=1) to get the most recently completed task
+          - Extract the project_id from the task
+          - If no completed tasks exist, exit gracefully (no work to do)
+        
+        STEP 2: Get project information
+          - From the completed task, extract the project_id
+          - Use todo-get_task_context() on the completed task to get project details
+          - Extract the project['local_path'] to know where the codebase is located
+        
+        STEP 3: Analyze codebase for refactoring opportunities
+          - Navigate to the project directory (from project['local_path'])
+          - Analyze Python files for:
+            * Files that are too long (>1000 lines) - use: find . -name '*.py' -exec wc -l {} + | sort -rn | head -20
+            * Functions/classes with high complexity (deep nesting, many branches)
+            * Inline logic that is too complex (equivalent of indent depth > 5-6 levels)
+            * Large functions (>100 lines)
+            * Classes with too many methods (>20 methods)
+          - For each file, analyze:
+            * Line count
+            * Maximum indentation depth (complexity indicator)
+            * Function/class sizes
+            * Cyclomatic complexity indicators
+        
+        STEP 4: Create refactoring tasks
+          - For each refactoring opportunity found, create a task using todo-create_task():
+            * task_type='concrete' (these are implementable refactoring tasks)
+            * priority='critical' (so future agents pick them up first)
+            * project_id=<project_id from completed task>
+            * title='Refactor: <brief description>' (e.g., 'Refactor: Split large database.py into smaller modules')
+            * task_instruction='<detailed instructions>':
+              - Specify the file(s) to refactor
+              - Explain what makes it problematic (line count, complexity, etc.)
+              - Provide specific refactoring strategy:
+                * How to split large files (suggest module structure)
+                * How to extract complex functions
+                * How to reduce nesting depth
+                * How to break down large classes
+              - Include verification steps
+            * verification_instruction='<how to verify the refactoring>':
+              - All tests still pass
+              - Code is more maintainable
+              - Complexity metrics improved
+              - No functionality lost
+            * notes='<additional context about why this refactoring is needed>'
+        
+        STEP 5: Document findings
+          - Create a summary of all refactoring opportunities found
+          - Note the priority (all should be 'critical')
+          - Explain the impact of each refactoring
+        
+        CRITICAL RULES:
+        - DO NOT make any code changes yourself - only create tasks
+        - DO NOT commit anything - you are only planning
+        - All tasks created should have priority='critical'
+        - All tasks should be concrete (implementable)
+        - Provide detailed, actionable instructions in task_instruction
+        - Focus on files that are genuinely problematic (very long, very complex)
+        - Use the project's local_path to navigate to the correct codebase
+        - If no refactoring opportunities are found, create a task noting that the codebase is in good shape
+        
+        Use the MCP TODO service tools directly with the 'todo-' prefix."
+    
+    # Run agent with strict timeout
+    log "Running refactor planner agent (timeout: ${AGENT_TIMEOUT}s)..."
+    if timeout "$AGENT_TIMEOUT" cursor-agent agent \
+        -p \
+        --model=auto \
+        --stream-partial-output \
+        --force \
+        --approve-mcps \
+        "${agent_prompt}" \
+        --output-format stream-json; then
+        
+        log_success "Refactor planner completed successfully"
+        return 0
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            log_error "❌ Agent TIMED OUT after ${AGENT_TIMEOUT}s during refactor planning"
+            log_error "❌ This may indicate the agent got stuck. Killing any remaining processes..."
+            pkill -9 -f "cursor-agent.*refactor" 2>/dev/null || true
+        else
+            log_error "cursor-agent returned non-zero exit code: $exit_code"
+        fi
+        return 1
+    fi
+}
+
+# Function to run project cleanup mode
+run_project_cleanup_mode() {
+    log "🧹 Running PROJECT CLEANUP mode..."
+    
+    local agent_prompt="
+        Your agent-id is $AGENT_ID
+        You are operating in PROJECT CLEANUP mode. Your job is to identify cleanup opportunities and create tasks for them.
+        
+        IMPORTANT: The MCP tools are already available to you. Use them directly with the 'todo-' prefix:
+          - todo-get_recent_completions() - Get the last completed task
+          - todo-get_task_context() - Get full task context including project info
+          - todo-create_task() - Create new cleanup tasks
+          - todo-query_tasks() - Query existing tasks
+        
+        WORKFLOW:
+        
+        STEP 1: Get the last completed task
+          - Call todo-get_recent_completions(limit=1) to get the most recently completed task
+          - Extract the project_id from the task
+          - If no completed tasks exist, exit gracefully (no work to do)
+        
+        STEP 2: Get project information
+          - From the completed task, extract the project_id
+          - Use todo-get_task_context() on the completed task to get project details
+          - Extract the project['local_path'] to know where the codebase is located
+        
+        STEP 3: Analyze project for cleanup opportunities
+        
+        PART A: Markdown file consolidation
+          - Navigate to the project directory (from project['local_path'])
+          - Find all .md files: find . -name '*.md' -type f
+          - For each .md file (except README.md and AGENTS.md):
+            * Read the file content
+            * Evaluate its relevance:
+              - Is it documentation that should be in README.md?
+              - Is it agent-specific guidance that should be in AGENTS.md?
+              - Is it outdated or redundant?
+              - Is it a temporary note that can be deleted?
+            * Determine the appropriate action:
+              - Incorporate into README.md (if general documentation)
+              - Incorporate into AGENTS.md (if agent-specific)
+              - Delete (if outdated/redundant)
+              - Keep as-is (if it serves a unique purpose)
+        
+        PART B: Top-level script evaluation
+          - Find all executable scripts in the project root: find . -maxdepth 1 -type f -executable
+          - For each script:
+            * Read the script to understand its purpose
+            * Check if it's a temporary solution (look for comments like 'temporary', 'hack', 'quick fix')
+            * Evaluate relevance:
+              - Is it still needed?
+              - Should it be incorporated into the project's official commands?
+              - Is it a one-off utility that can be deleted?
+            * Check if similar functionality exists in the official command structure
+        
+        STEP 4: Create cleanup tasks
+          - For each cleanup opportunity, create a task using todo-create_task():
+            * task_type='concrete' (these are implementable cleanup tasks)
+            * priority='medium' or 'high' (depending on impact)
+            * project_id=<project_id from completed task>
+            * title='Cleanup: <brief description>' (e.g., 'Cleanup: Consolidate documentation files into README.md')
+            * task_instruction='<detailed instructions>':
+              For markdown consolidation:
+                - List the .md files to process
+                - Specify what content goes where (README.md vs AGENTS.md)
+                - Provide the exact sections/formatting to use
+                - Include steps to verify nothing is lost
+                - Specify to delete the original files after consolidation
+              
+              For script consolidation:
+                - Identify the script to process
+                - Explain how to incorporate it into official commands (e.g., as a Command subclass)
+                - Provide migration steps
+                - Include verification steps
+                - Specify to remove the original script after migration
+            * verification_instruction='<how to verify the cleanup>':
+              - Documentation is consolidated and accessible
+              - Scripts are properly integrated
+              - No functionality is lost
+              - Project structure is cleaner
+            * notes='<additional context>'
+        
+        STEP 5: Document findings
+          - Create a summary of all cleanup opportunities
+          - Note the priority and rationale for each
+        
+        CRITICAL RULES:
+        - DO NOT make any changes yourself - only create tasks
+        - DO NOT delete files or modify documentation - you are only planning
+        - Provide detailed, actionable instructions in task_instruction
+        - Be conservative - don't delete things that might be important
+        - For markdown files: prefer consolidation over deletion
+        - For scripts: prefer integration into official commands over deletion
+        - Use the project's local_path to navigate to the correct codebase
+        - If no cleanup opportunities are found, create a task noting that the project is well-organized
+        
+        Use the MCP TODO service tools directly with the 'todo-' prefix."
+    
+    # Run agent with strict timeout
+    log "Running project cleanup agent (timeout: ${AGENT_TIMEOUT}s)..."
+    if timeout "$AGENT_TIMEOUT" cursor-agent agent \
+        -p \
+        --model=auto \
+        --stream-partial-output \
+        --force \
+        --approve-mcps \
+        "${agent_prompt}" \
+        --output-format stream-json; then
+        
+        log_success "Project cleanup planner completed successfully"
+        return 0
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            log_error "❌ Agent TIMED OUT after ${AGENT_TIMEOUT}s during project cleanup"
+            log_error "❌ This may indicate the agent got stuck. Killing any remaining processes..."
+            pkill -9 -f "cursor-agent.*cleanup" 2>/dev/null || true
+        else
+            log_error "cursor-agent returned non-zero exit code: $exit_code"
+        fi
+        return 1
+    fi
+}
+
+# Main loop
+log "Starting cursor-agent loop"
+log "Agent ID: $AGENT_ID"
+log "Project ID: ${PROJECT_ID:-all projects}"
+log "Agent Type: $AGENT_TYPE"
+log "Agent Mode: $AGENT_MODE"
+log "Sleep interval: ${SLEEP_INTERVAL}s"
+if [ -n "$MAX_LOOPS" ]; then
+    log "Maximum loops: $MAX_LOOPS"
+else
+    log "Running indefinitely (no loop limit)"
+fi
+
+TASK_ID=""
+LOOP_COUNT=0
+
+while true; do
+    LOOP_COUNT=$((LOOP_COUNT + 1))
+    TASK_ID=""
+    
+    # Check if we've reached the maximum loop count
+    if [ -n "$MAX_LOOPS" ] && [ "$LOOP_COUNT" -gt "$MAX_LOOPS" ]; then
+        log "Reached maximum loop count of ${MAX_LOOPS}. Exiting."
+        break
+    fi
+    
+    log "Starting task iteration #${LOOP_COUNT}${MAX_LOOPS:+ / ${MAX_LOOPS}}..."
+    
+    # Mode selection logic:
+    # 1. Pre-commit fix mode has highest priority (checked first)
+    # 2. Then use AGENT_MODE environment variable
+    
+    # Check for pre-commit failure semaphore (highest priority - overrides AGENT_MODE)
+    SEMAPHORE_FILE=".pre-commit-failed"
+    if [ -f "$SEMAPHORE_FILE" ]; then
+        log "🔧 Mode: PRE-COMMIT FIX (semaphore detected)"
+        if run_precommit_fix_mode; then
+            # Semaphore was removed, continue to next iteration
+            if [ -n "$MAX_LOOPS" ] && [ "$LOOP_COUNT" -ge "$MAX_LOOPS" ]; then
+                log "Completed ${LOOP_COUNT} iteration(s). Exiting."
+                break
+            fi
+            log "Sleeping ${SLEEP_INTERVAL}s before next iteration..."
+            sleep "$SLEEP_INTERVAL"
+            continue
+        else
+            # Semaphore still exists, will retry
+            log_warning "Will retry on next iteration..."
+            sleep "$SLEEP_INTERVAL"
+            continue
+        fi
+    fi
+    
+    # No semaphore - proceed with selected mode
+    case "$AGENT_MODE" in
+        "precommit")
+            log "🔧 Mode: PRE-COMMIT FIX (explicit mode)"
+            if run_precommit_fix_mode; then
+                log_success "Pre-commit fix completed"
+            else
+                log_warning "Pre-commit fix failed, will retry"
+            fi
+            ;;
+        "refactor-planner")
+            log "🔍 Mode: REFACTOR PLANNER"
+            if run_refactor_planner_mode; then
+                log_success "Refactor planner completed"
+            else
+                log_warning "Refactor planner failed"
+            fi
+            ;;
+        "project-cleanup")
+            log "🧹 Mode: PROJECT CLEANUP"
+            if run_project_cleanup_mode; then
+                log_success "Project cleanup planner completed"
+            else
+                log_warning "Project cleanup planner failed"
+            fi
+            ;;
+        "normal"|*)
+            log "📋 Mode: NORMAL TASK WORK"
+            if run_normal_task_mode; then
+                log_success "Task work completed"
+            else
+                log_warning "Task work failed, will retry"
+            fi
+            ;;
+    esac
+    
+    # Check if we've reached the maximum loop count before sleeping
+    if [ -n "$MAX_LOOPS" ] && [ "$LOOP_COUNT" -ge "$MAX_LOOPS" ]; then
+        log "Completed ${LOOP_COUNT} iteration(s). Exiting."
+        break
+    fi
+    
+    log "Sleeping ${SLEEP_INTERVAL}s before next iteration..."
+    sleep "$SLEEP_INTERVAL"
 done
 
 log "Agent loop finished. Completed ${LOOP_COUNT} iteration(s)."
