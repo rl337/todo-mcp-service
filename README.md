@@ -36,6 +36,38 @@ docker compose logs -f
 
 **Note**: This service follows the [MCP Services Containerization Standards](../agenticness/CONTAINERIZATION.md). The Dockerfile uses UV for dependency management and follows standard patterns for security and reproducibility.
 
+### External Network Integration
+
+To-Do-Rama creates a Docker network (`todo-network`) that can be used by other services for cross-container communication. This enables services in different Docker Compose projects to communicate.
+
+**Network Name**: `todo-network`
+
+**Other services can connect to this network** by declaring it as an external network in their `docker-compose.yml`:
+
+```yaml
+networks:
+  todo-network:
+    external: true
+    name: todo-network
+```
+
+Then reference it in their services:
+
+```yaml
+services:
+  my-service:
+    networks:
+      - todo-network
+```
+
+**Benefits:**
+- ✅ Services can communicate using container names (e.g., `http://todo-mcp-service:8004`)
+- ✅ Network persists even if To-Do-Rama stops (if other services reference it)
+- ✅ Enables independent deployment and scaling of services
+- ✅ No need for a single monolithic docker-compose file
+
+**Note**: The network is created automatically when To-Do-Rama starts. Other services must start after To-Do-Rama to ensure the network exists.
+
 ### Using Docker Directly
 
 ```bash

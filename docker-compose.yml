@@ -10,14 +10,14 @@ services:
     environment:
       # Database configuration - SQLite only
       - DB_TYPE=sqlite
-      - TODO_DB_PATH=/app/data/todos.db
+      - TODO_DB_PATH=/data/todos.db
       # Other settings
-      - TODO_BACKUPS_DIR=/app/backups
+      - TODO_BACKUPS_DIR=/data/backups
       - TODO_SERVICE_PORT=8004
       - TODO_BACKUP_INTERVAL_HOURS=24
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # NATS configuration
-      - NATS_URL=${NATS_URL:-nats://nats:4222}
+      - NATS_URL=${NATS_URL:-nats://common-nats:4222}
       - NATS_USE_JETSTREAM=${NATS_USE_JETSTREAM:-true}
       - NATS_NUM_WORKERS=${NATS_NUM_WORKERS:-1}
       # OpenTelemetry configuration
@@ -27,11 +27,9 @@ services:
       - OTEL_EXPORTER_JAEGER_ENABLED=${OTEL_EXPORTER_JAEGER_ENABLED:-false}
       - OTEL_CONSOLE_EXPORTER_ENABLED=${OTEL_CONSOLE_EXPORTER_ENABLED:-false}
     volumes:
-      - /var/data/june/todorama-mcp-service/data:/app/data
-      - /var/data/june/todorama-mcp-service/backups:/app/backups
+      - /var/data/june/todorama-mcp-service:/data
+      - /var/log/june/todorama-mcp-service:/logs
     depends_on:
-      nats:
-        condition: service_healthy
       jaeger:
         condition: service_started
     healthcheck:
@@ -49,7 +47,7 @@ services:
           cpus: '${TODO_SERVICE_CPU_RESERVATION:-0.5}'
           memory: ${TODO_SERVICE_MEMORY_RESERVATION:-256M}
     networks:
-      - todo-network
+      - shared-network
 
   telegram-service:
     build:
@@ -67,6 +65,8 @@ services:
       - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL:-}
       - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
       - TELEGRAM_USE_POLLING=${TELEGRAM_USE_POLLING:-false}
+    volumes:
+      - /var/log/june/todorama-telegram-service:/logs
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
       interval: 30s
@@ -82,26 +82,7 @@ services:
           cpus: '${TELEGRAM_SERVICE_CPU_RESERVATION:-0.25}'
           memory: ${TELEGRAM_SERVICE_MEMORY_RESERVATION:-256M}
     networks:
-      - todo-network
-
-  nats:
-    image: nats:2.10-alpine
-    container_name: todo-nats
-    restart: unless-stopped
-    command:
-      - "-js"
-      - "-m"
-      - "8222"
-    ports:
-      - "${NATS_PORT:-4223}:4222"  # Client connections (using 4223 to avoid conflict)
-      - "${NATS_MONITORING_PORT:-8223}:8222"  # HTTP monitoring (using 8223 to avoid conflict)
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - todo-network
+      - shared-network
 
   jaeger:
     image: jaegertracing/all-in-one:latest
@@ -115,15 +96,19 @@ services:
       - "${JAEGER_JAEGER_THRIFT_COMPACT_PORT:-6831}:6831/udp"  # Jaeger Thrift Compact (UDP)
     environment:
       - COLLECTOR_OTLP_ENABLED=true
+    volumes:
+      - /var/log/june/todo-jaeger:/logs
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:16686"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - todo-network
+      - shared-network
 
 networks:
-  todo-network:
-    driver: bridge
+  # External network for shared infrastructure
+  shared-network:
+    external: true
+    name: shared_network
 
