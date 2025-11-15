@@ -247,32 +247,37 @@ def handle_sse_request(request: Dict[str, Any]) -> str:
     Returns:
         SSE-formatted string with JSON-RPC response
     """
+    import json
+    
     # For POST requests with JSON-RPC, process as JSON-RPC
     if "jsonrpc" in request or "method" in request:
         result = handle_jsonrpc_request(request)
-        import json
         return f"data: {json.dumps(result)}\n\n"
+    
+    # For GET requests, return tools/list by default (for Cursor SSE discovery)
+    method = request.get("method", "tools/list")
+    if method == "tools/list" or method == "list_functions":
+        # Return proper tools/list response for MCP SSE
+        tools = []
+        for func_def in MCP_FUNCTIONS:
+            tools.append({
+                "name": func_def["name"],
+                "description": func_def["description"],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": func_def.get("parameters", {}),
+                    "required": [k for k, v in func_def.get("parameters", {}).items() if v.get("optional") is not True]
+                }
+            })
+        response = {
+            "jsonrpc": "2.0",
+            "id": None,
+            "result": {
+                "tools": tools
+            }
+        }
+        return f"data: {json.dumps(response)}\n\n"
     else:
-        # For GET requests or simple method requests
-        method = request.get("method", "list_functions")
-        if method == "list_functions":
-            import json
-            response = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "result": {
-                    "functions": [f["name"] for f in MCP_FUNCTIONS]
-                }
-            }
-            return f"data: {json.dumps(response)}\n\n"
-        else:
-            import json
-            response = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32601,
-                    "message": f"Method not found: {method}"
-                }
-            }
-            return f"data: {json.dumps(response)}\n\n"
+        # Try as JSON-RPC request
+        result = handle_jsonrpc_request(request)
+        return f"data: {json.dumps(result)}\n\n"

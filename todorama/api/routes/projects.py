@@ -27,7 +27,10 @@ logger = logging.getLogger(__name__)
 async def create_project(project: ProjectCreate) -> ProjectResponse:
     """Create a new project."""
     db = get_db()
-    project_service = ProjectService(db)
+    if db is None:
+        logger.error("get_db() returned None")
+        raise HTTPException(status_code=500, detail="Database not initialized")
+    project_service = ProjectService(db=db)
     try:
         created = project_service.create_project(project)
         return ProjectResponse(**created)
@@ -48,7 +51,10 @@ async def list_projects(
 ) -> List[ProjectResponse]:
     """List all projects."""
     db = get_db()
-    project_service = ProjectService(db)
+    if db is None:
+        logger.error("get_db() returned None")
+        raise HTTPException(status_code=500, detail="Database not initialized")
+    project_service = ProjectService(db=db)
     projects = project_service.list_projects()
     return [ProjectResponse(**project) for project in projects]
 
@@ -57,7 +63,10 @@ async def list_projects(
 async def get_project(project_id: int = Path(..., gt=0)) -> ProjectResponse:
     """Get a project by ID."""
     db = get_db()
-    project_service = ProjectService(db)
+    if db is None:
+        logger.error("get_db() returned None")
+        raise HTTPException(status_code=500, detail="Database not initialized")
+    project_service = ProjectService(db=db)
     project = project_service.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
@@ -68,7 +77,10 @@ async def get_project(project_id: int = Path(..., gt=0)) -> ProjectResponse:
 async def get_project_by_name(project_name: str = Path(..., min_length=1)) -> ProjectResponse:
     """Get a project by name."""
     db = get_db()
-    project_service = ProjectService(db)
+    if db is None:
+        logger.error("get_db() returned None")
+        raise HTTPException(status_code=500, detail="Database not initialized")
+    project_service = ProjectService(db=db)
     project = project_service.get_project_by_name(project_name)
     if not project:
         raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found")

@@ -385,26 +385,50 @@ async def mcp_jsonrpc(request: dict = Body(...)):
 @router.post("/sse")
 async def mcp_sse_post(request: dict = Body(...)):
     """Server-Sent Events endpoint for MCP (POST)."""
+    import json
+    import logging
+    
+    # Use the same logger pattern as other routes
+    logger = logging.getLogger("todorama.api.routes.mcp")
+    
+    # Log the incoming request for debugging
+    method = request.get('method', 'unknown')
+    request_id = request.get('id', 'no-id')
+    logger.info(f"MCP SSE POST: method={method}, id={request_id}")
+    
     from todorama.mcp_api import handle_jsonrpc_request
     from todorama.adapters.http_framework import HTTPFrameworkAdapter
     http_adapter = HTTPFrameworkAdapter()
     StreamingResponse = http_adapter.StreamingResponse
     # POST requests with JSON-RPC should return SSE format for Cursor's SSE client
     result = handle_jsonrpc_request(request)
-    import json
+    
+    # Log the response for debugging
+    if method == 'tools/list':
+        tools_count = len(result.get('result', {}).get('tools', []))
+        logger.info(f"MCP tools/list RESPONSE: {tools_count} tools returned, response_id={result.get('id')}")
+        # Also log first few tool names for verification
+        tools = result.get('result', {}).get('tools', [])
+        if tools:
+            tool_names = [t.get('name') for t in tools[:3]]
+            logger.info(f"MCP tools/list: First 3 tools: {tool_names}")
+    
     sse_result = f"data: {json.dumps(result)}\n\n"
     return StreamingResponse(content=sse_result, media_type="text/event-stream")
 
 
 @router.get("/sse")
 async def mcp_sse_get():
-    """Server-Sent Events endpoint for MCP (GET)."""
+    """Server-Sent Events endpoint for MCP (GET).
+    
+    Returns tools/list response for Cursor SSE tool discovery.
+    """
     from todorama.mcp_api import handle_sse_request
     from todorama.adapters.http_framework import HTTPFrameworkAdapter
     http_adapter = HTTPFrameworkAdapter()
     StreamingResponse = http_adapter.StreamingResponse
-    # GET endpoint with no params returns list of available functions
-    result = handle_sse_request({"method": "list_functions"})
+    # GET endpoint returns tools/list for MCP SSE tool discovery
+    result = handle_sse_request({"method": "tools/list"})
     return StreamingResponse(content=result, media_type="text/event-stream")
 
 
