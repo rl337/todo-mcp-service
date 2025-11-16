@@ -13,7 +13,7 @@ from todorama.adapters import HTTPClientAdapterFactory, HTTPResponse, HTTPStatus
 
 def get_service_url() -> str:
     """Get service URL from environment or default."""
-    return os.getenv("TODO_SERVICE_URL", "http://localhost:8004")
+    return os.getenv("TODO_SERVICE_URL", "http://localhost:8000/mcp/todo-mcp-service")
 
 
 def get_api_key() -> Optional[str]:
@@ -87,7 +87,7 @@ def format_json(data: Any) -> str:
 
 @click.group()
 @click.option('--url', envvar='TODO_SERVICE_URL', default=None,
-              help='TODO service URL (default: http://localhost:8004)')
+              help='TODO service URL (default: http://localhost:8000/mcp/todo-mcp-service)')
 @click.option('--api-key', envvar='TODO_API_KEY', default=None,
               help='API key for authentication')
 @click.pass_context

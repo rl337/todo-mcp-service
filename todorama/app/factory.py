@@ -114,7 +114,7 @@ async def lifespan(app):
     
     # Initialize and enable distributed tracing
     try:
-        from tracing import setup_tracing, instrument_fastapi, instrument_database, instrument_httpx
+        from todorama.tracing import setup_tracing, instrument_fastapi, instrument_database, instrument_httpx
         setup_tracing()
         instrument_fastapi(app)
         instrument_database()

@@ -366,7 +366,7 @@ class KeyManagementCommand(Command):
             logger.error("Provide via: --admin-key, TODO_ADMIN_KEY env var, or api_keys.json")
             return 1
         
-        API_BASE = os.getenv("TODO_SERVICE_URL", "http://localhost:8004").rstrip("/")
+        API_BASE = os.getenv("TODO_SERVICE_URL", "http://localhost:8000/mcp/todo-mcp-service").rstrip("/")
         if not API_BASE.startswith("http"):
             API_BASE = f"http://{API_BASE}"
         API_BASE = f"{API_BASE}/api"

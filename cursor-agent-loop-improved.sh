@@ -30,7 +30,7 @@ PROJECT_ID="${CURSOR_PROJECT_ID:-}"
 AGENT_TYPE="${CURSOR_AGENT_TYPE:-implementation}"
 AGENT_MODE="${CURSOR_AGENT_MODE:-normal}"  # normal, precommit, refactor-planner, project-cleanup
 SLEEP_INTERVAL="${CURSOR_SLEEP_INTERVAL:-60}"
-TODO_SERVICE_URL="${TODO_SERVICE_URL:-http://localhost:8004}"
+TODO_SERVICE_URL="${TODO_SERVICE_URL:-http://localhost:8000/mcp/todo-mcp-service}"
 
 # Timeout configuration (in seconds)
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-3600}"  # 1 hour max for agent execution

@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: src/Dockerfile
-    container_name: todo-mcp-service
+    container_name: todorama-mcp-service-todo
     restart: unless-stopped
     ports:
       - "${TODO_SERVICE_PORT:-8004}:8004"
@@ -23,19 +23,17 @@ services:
       # OpenTelemetry configuration
       - OTEL_SERVICE_NAME=todo-mcp-service
       - OTEL_EXPORTER_OTLP_ENABLED=${OTEL_EXPORTER_OTLP_ENABLED:-true}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://common-jaeger:4317
       - OTEL_EXPORTER_JAEGER_ENABLED=${OTEL_EXPORTER_JAEGER_ENABLED:-false}
       - OTEL_CONSOLE_EXPORTER_ENABLED=${OTEL_CONSOLE_EXPORTER_ENABLED:-false}
     volumes:
       - /var/data/june/todorama-mcp-service:/data
       - /var/log/june/todorama-mcp-service:/logs
-    depends_on:
-      jaeger:
-        condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8004/health"]
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:8004/health"]
       interval: 30s
       timeout: 10s
+      start_period: 30s
       retries: 3
     # Resource limits for production
     deploy:
@@ -46,63 +44,6 @@ services:
         reservations:
           cpus: '${TODO_SERVICE_CPU_RESERVATION:-0.5}'
           memory: ${TODO_SERVICE_MEMORY_RESERVATION:-256M}
-    networks:
-      - shared-network
-
-  telegram-service:
-    build:
-      context: .
-      dockerfile: src/Dockerfile
-    container_name: telegram-service
-    restart: unless-stopped
-    ports:
-      - "${TELEGRAM_SERVICE_PORT:-8080}:8080"
-    environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_SERVICE_PORT=8080
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # Webhook configuration for production (vs. polling for dev)
-      - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL:-}
-      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
-      - TELEGRAM_USE_POLLING=${TELEGRAM_USE_POLLING:-false}
-    volumes:
-      - /var/log/june/todorama-telegram-service:/logs
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    # Resource limits for production
-    deploy:
-      resources:
-        limits:
-          cpus: '${TELEGRAM_SERVICE_CPU_LIMIT:-1.0}'
-          memory: ${TELEGRAM_SERVICE_MEMORY_LIMIT:-512M}
-        reservations:
-          cpus: '${TELEGRAM_SERVICE_CPU_RESERVATION:-0.25}'
-          memory: ${TELEGRAM_SERVICE_MEMORY_RESERVATION:-256M}
-    networks:
-      - shared-network
-
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    container_name: todo-jaeger
-    restart: unless-stopped
-    ports:
-      - "${JAEGER_UI_PORT:-16686}:16686"  # Jaeger UI
-      - "${JAEGER_OTLP_GRPC_PORT:-4317}:4317"  # OTLP gRPC receiver
-      - "${JAEGER_OTLP_HTTP_PORT:-4318}:4318"  # OTLP HTTP receiver
-      - "${JAEGER_JAEGER_THRIFT_HTTP_PORT:-14268}:14268"  # Jaeger Thrift HTTP
-      - "${JAEGER_JAEGER_THRIFT_COMPACT_PORT:-6831}:6831/udp"  # Jaeger Thrift Compact (UDP)
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
-    volumes:
-      - /var/log/june/todo-jaeger:/logs
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:16686"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     networks:
       - shared-network
 

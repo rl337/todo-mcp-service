@@ -6,7 +6,7 @@ import requests
 from pathlib import Path
 
 API_KEYS_FILE = Path("api_keys.json")
-API_BASE = "http://localhost:8004/api"
+API_BASE = "http://localhost:8000/mcp/todo-mcp-service/api"
 
 def create_admin_key_via_db():
     """Create admin key by directly accessing the database."""
