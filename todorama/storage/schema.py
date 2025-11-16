@@ -596,6 +596,25 @@ class SchemaManager:
         """)
         self._execute_with_logging(cursor, query)
     
+    def _column_exists(self, cursor, table_name: str, column_name: str) -> bool:
+        """Check if a column exists in a table."""
+        try:
+            if self.db_type == "sqlite":
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                columns = [row[1] for row in cursor.fetchall()]
+                return column_name in columns
+            else:
+                # PostgreSQL
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = %s AND column_name = %s
+                """, (table_name, column_name))
+                return cursor.fetchone() is not None
+        except Exception as e:
+            logger.warning(f"Error checking if column {column_name} exists in {table_name}: {e}")
+            return False
+    
     def _create_indexes(self, cursor):
         """Create all database indexes for performance."""
         indexes = [
@@ -652,7 +671,6 @@ class SchemaManager:
             "CREATE INDEX IF NOT EXISTS idx_tasks_status_type ON tasks(task_status, task_type)",
             "CREATE INDEX IF NOT EXISTS idx_tasks_project_status ON tasks(project_id, task_status)",
             "CREATE INDEX IF NOT EXISTS idx_tasks_project_status_type ON tasks(project_id, task_status, task_type)",
-            "CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(task_status, priority)",
             "CREATE INDEX IF NOT EXISTS idx_relationships_parent_type ON task_relationships(parent_task_id, relationship_type)",
             "CREATE INDEX IF NOT EXISTS idx_relationships_child_type ON task_relationships(child_task_id, relationship_type)",
             "CREATE INDEX IF NOT EXISTS idx_task_tags_task_tag ON task_tags(task_id, tag_id)",
@@ -667,6 +685,11 @@ class SchemaManager:
             "CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_team_members_role ON team_members(role_id)",
         ]
+        
+        # Conditionally create indexes on columns that may not exist yet (added by migrations)
+        # Priority column index (added by Alembic migration f5515f171fc4)
+        if self._column_exists(cursor, 'tasks', 'priority'):
+            indexes.append("CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(task_status, priority)")
         
         # PostgreSQL doesn't support DESC in CREATE INDEX, need separate handling
         if self.db_type == "postgresql":
