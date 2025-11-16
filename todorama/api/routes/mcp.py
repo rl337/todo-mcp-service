@@ -421,15 +421,96 @@ async def mcp_sse_post(request: dict = Body(...)):
 async def mcp_sse_get():
     """Server-Sent Events endpoint for MCP (GET).
     
-    Returns tools/list response for Cursor SSE tool discovery.
+    Returns discovery information (tools, prompts, resources) for Cursor SSE.
+    Sends multiple SSE events: initialize, tools/list, prompts/list, resources/list.
     """
-    from todorama.mcp_api import handle_sse_request
+    import json
+    import logging
+    from todorama.mcp_api import handle_jsonrpc_request
     from todorama.adapters.http_framework import HTTPFrameworkAdapter
     http_adapter = HTTPFrameworkAdapter()
     StreamingResponse = http_adapter.StreamingResponse
-    # GET endpoint returns tools/list for MCP SSE tool discovery
-    result = handle_sse_request({"method": "tools/list"})
-    return StreamingResponse(content=result, media_type="text/event-stream")
+    logger = logging.getLogger("todorama.api.routes.mcp")
+    
+    async def generate_sse_stream():
+        """Generate SSE stream with all discovery information.
+        
+        Keeps connection open for UI discovery. Sends discovery events
+        and then keeps connection alive for bidirectional communication.
+        """
+        import asyncio
+        
+        # Send initialize response
+        init_response = handle_jsonrpc_request({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "cursor",
+                    "version": "1.0.0"
+                }
+            }
+        })
+        yield f"data: {json.dumps(init_response)}\n\n"
+        
+        # Small delay to ensure events are processed separately
+        await asyncio.sleep(0.1)
+        
+        # Send tools/list
+        tools_response = handle_jsonrpc_request({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        })
+        tools_count = len(tools_response.get('result', {}).get('tools', []))
+        logger.info(f"MCP SSE GET: Sending {tools_count} tools")
+        yield f"data: {json.dumps(tools_response)}\n\n"
+        
+        await asyncio.sleep(0.1)
+        
+        # Send prompts/list
+        prompts_response = handle_jsonrpc_request({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "prompts/list",
+            "params": {}
+        })
+        yield f"data: {json.dumps(prompts_response)}\n\n"
+        
+        await asyncio.sleep(0.1)
+        
+        # Send resources/list
+        resources_response = handle_jsonrpc_request({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "resources/list",
+            "params": {}
+        })
+        yield f"data: {json.dumps(resources_response)}\n\n"
+        
+        # Keep connection open for UI discovery
+        # Send periodic keepalive to prevent connection timeout
+        try:
+            while True:
+                await asyncio.sleep(30)  # Send keepalive every 30 seconds
+                yield f": keepalive\n\n"
+        except asyncio.CancelledError:
+            logger.info("MCP SSE GET: Connection closed by client")
+            raise
+    
+    return StreamingResponse(
+        generate_sse_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # Disable nginx buffering
+        }
+    )
 
 
 @router.post("/list_available_tasks")
