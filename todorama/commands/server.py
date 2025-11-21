@@ -37,6 +37,11 @@ class ServerCommand(Command):
             action="store_true",
             help="Enable auto-reload (development mode)"
         )
+        parser.add_argument(
+            "--init-only",
+            action="store_true",
+            help="Initialize database and run migrations, then exit (does not start server)"
+        )
     
     def init(self):
         """Initialize the server command."""
@@ -49,7 +54,29 @@ class ServerCommand(Command):
         logger.info(f"Server initialized on {self.args.host}:{self.args.port}")
     
     def run(self) -> int:
-        """Run the web server."""
+        """Run the web server or initialize database if --init-only is set."""
+        # If --init-only, run initialization and exit
+        if self.args.init_only:
+            from todorama.commands.initialize import InitializeCommand
+            from argparse import Namespace
+            
+            init_args = Namespace(
+                database_path=None,
+                skip_migrations=False,
+                validate_only=False
+            )
+            
+            init_cmd = InitializeCommand(init_args)
+            try:
+                init_cmd.init()
+                result = init_cmd.run()
+                if result == 0:
+                    logger.info("✅ Database initialization complete")
+                return result
+            finally:
+                init_cmd.cleanup()
+        
+        # Normal server startup
         config = uvicorn.Config(
             self.app,
             host=self.args.host,

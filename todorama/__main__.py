@@ -185,6 +185,12 @@ def main():
     except ImportError as e:
         logger.warning(f"VerifyCommand could not be imported: {e}")
     
+    try:
+        from todorama.commands.initialize import InitializeCommand
+        register_command(InitializeCommand)
+    except ImportError as e:
+        logger.warning(f"InitializeCommand could not be imported: {e}")
+    
     # Create subparsers for each command
     for name, cmd_class in _COMMANDS.items():
         subparser = subparsers.add_parser(

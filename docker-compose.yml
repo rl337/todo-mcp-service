@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: src/Dockerfile
-    container_name: todorama-mcp-service-todo
+    container_name: todo-mcp-service
     restart: unless-stopped
     ports:
       - "${TODO_SERVICE_PORT:-8004}:8004"
@@ -30,10 +30,9 @@ services:
       - /var/data/june/todorama-mcp-service:/data
       - /var/log/june/todorama-mcp-service:/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "-s", "http://localhost:8004/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8004/health"]
       interval: 30s
       timeout: 10s
-      start_period: 30s
       retries: 3
     # Resource limits for production
     deploy:
@@ -46,6 +45,42 @@ services:
           memory: ${TODO_SERVICE_MEMORY_RESERVATION:-256M}
     networks:
       - shared-network
+
+  telegram-service:
+    build:
+      context: .
+      dockerfile: src/Dockerfile
+    container_name: telegram-service
+    restart: unless-stopped
+    ports:
+      - "${TELEGRAM_SERVICE_PORT:-8080}:8080"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_SERVICE_PORT=8080
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Webhook configuration for production (vs. polling for dev)
+      - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL:-}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
+      - TELEGRAM_USE_POLLING=${TELEGRAM_USE_POLLING:-false}
+    volumes:
+      - /var/log/june/todorama-telegram-service:/logs
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          cpus: '${TELEGRAM_SERVICE_CPU_LIMIT:-1.0}'
+          memory: ${TELEGRAM_SERVICE_MEMORY_LIMIT:-512M}
+        reservations:
+          cpus: '${TELEGRAM_SERVICE_CPU_RESERVATION:-0.25}'
+          memory: ${TELEGRAM_SERVICE_MEMORY_RESERVATION:-256M}
+    networks:
+      - shared-network
+
 
 networks:
   # External network for shared infrastructure

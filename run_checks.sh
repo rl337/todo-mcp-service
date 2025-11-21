@@ -104,6 +104,7 @@ run_tests() {
     print_header "Running Unit Tests (Parallel)"
     
     local test_files=(
+        "tests/test_database_initialization.py"
         "tests/test_database.py"
         "tests/test_backup.py"
         "tests/test_api.py"
@@ -118,9 +119,7 @@ run_tests() {
     )
     
     # Determine pytest command
-    if command -v uv &> /dev/null && [ -f ".venv/bin/pytest" ]; then
-        pytest_cmd=".venv/bin/pytest"
-    elif command -v uv &> /dev/null; then
+    if command -v uv &> /dev/null; then
         pytest_cmd="uv run pytest"
     elif command -v poetry &> /dev/null; then
         pytest_cmd="poetry run pytest"
@@ -173,7 +172,13 @@ run_tests() {
                 pytest_args="$pytest_args -n auto"
             fi
             
-            if timeout --kill-after=10 300 $pytest_cmd "$test_file" $pytest_args > "$output_file" 2>&1; then
+            # Get pytest command in subshell (function is defined in parent scope)
+            local cmd_pytest=$(get_pytest_cmd)
+            
+            # Build full command as array to avoid shell parsing issues
+            local cmd_array=($cmd_pytest "$test_file" $pytest_args)
+            
+            if timeout --kill-after=10 300 "${cmd_array[@]}" > "$output_file" 2>&1; then
                 echo "0" > "$result_file"
             else
                 EXIT_CODE=$?
@@ -260,9 +265,7 @@ check_code_quality() {
     
     # Check for imports
     # Use UV venv if available, otherwise Poetry, otherwise system python
-    if command -v uv &> /dev/null && [ -f ".venv/bin/python3" ]; then
-        python_cmd=".venv/bin/python3"
-    elif command -v uv &> /dev/null; then
+    if command -v uv &> /dev/null; then
         python_cmd="uv run python3"
     elif command -v poetry &> /dev/null; then
         python_cmd="poetry run python3"
@@ -323,33 +326,47 @@ test_service_startup() {
     fi
 }
 
-# Test database schema
+# Test database schema and initialization
 test_database_schema() {
-    print_header "Testing Database Schema"
+    print_header "Testing Database Schema and Initialization"
     
     # Create a temporary database and test schema initialization
     local test_db="/tmp/todo_test_$(date +%s).db"
+    local test_dir=$(dirname "$test_db")
     
     # Use UV venv if available, otherwise Poetry, otherwise system python
-    if command -v uv &> /dev/null && [ -f ".venv/bin/python3" ]; then
-        python_cmd=".venv/bin/python3"
-    elif command -v uv &> /dev/null; then
+    if command -v uv &> /dev/null; then
         python_cmd="uv run python3"
+        todorama_cmd="uv run python3 -m todorama"
     elif command -v poetry &> /dev/null; then
         python_cmd="poetry run python3"
+        todorama_cmd="poetry run python3 -m todorama"
     else
         python_cmd="python3"
+        todorama_cmd="python3 -m todorama"
+    fi
+    
+    # Test 1: Run initialize command
+    print_info "Testing initialize command..."
+    if $todorama_cmd init --database-path "$test_db" > /tmp/todo_init_test.log 2>&1; then
+        print_success "Initialize command succeeded"
+    else
+        print_error "Initialize command failed"
+        cat /tmp/todo_init_test.log
+        rm -f "$test_db"
+        return 1
+    fi
+    
+    # Test 2: Verify database was created and has correct schema
+    if [ ! -f "$test_db" ]; then
+        print_error "Database file was not created"
+        return 1
     fi
     
     if $python_cmd << EOF 
-from todorama.database import TodoDatabase
-import os
-import sys
 import sqlite3
+import sys
 
-db = TodoDatabase('$test_db')
-
-# Test that schema was created
 conn = sqlite3.connect('$test_db')
 cursor = conn.cursor()
 
@@ -363,17 +380,25 @@ missing = [t for t in required_tables if t not in table_names]
 if missing:
     print(f"MISSING_TABLES: {missing}")
     sys.exit(1)
-else:
-    print("SCHEMA_OK")
-    sys.exit(0)
+
+# Check for priority column in tasks table
+cursor.execute("PRAGMA table_info(tasks)")
+columns = [row[1] for row in cursor.fetchall()]
+
+if 'priority' not in columns:
+    print("MISSING_PRIORITY_COLUMN")
+    sys.exit(1)
+
+print("SCHEMA_OK")
+sys.exit(0)
 EOF
     then
-        print_success "Database schema is correct"
-        rm -f "$test_db"
+        print_success "Database schema is correct (including priority column)"
+        rm -f "$test_db" /tmp/todo_init_test.log
         return 0
     else
-        print_error "Database schema test failed"
-        rm -f "$test_db"
+        print_error "Database schema validation failed"
+        rm -f "$test_db" /tmp/todo_init_test.log
         return 1
     fi
 }
@@ -383,9 +408,7 @@ test_backup_functionality() {
     print_header "Testing Backup Functionality"
     
     # Use UV venv if available, otherwise Poetry, otherwise system pytest
-    if command -v uv &> /dev/null && [ -f ".venv/bin/pytest" ]; then
-        pytest_cmd=".venv/bin/pytest"
-    elif command -v uv &> /dev/null; then
+    if command -v uv &> /dev/null; then
         pytest_cmd="uv run pytest"
     elif command -v poetry &> /dev/null; then
         pytest_cmd="poetry run pytest"
