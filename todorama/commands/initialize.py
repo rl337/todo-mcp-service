@@ -185,7 +185,8 @@ class InitializeCommand(Command):
                 "id", "project_id", "title", "task_type", "task_instruction",
                 "verification_instruction", "task_status", "verification_status",
                 "assigned_agent", "created_at", "updated_at", "completed_at",
-                "notes", "priority"  # priority was added in migration
+                "notes", "priority",  # priority was added in migration
+                "estimated_hours", "actual_hours", "started_at", "time_delta_hours", "due_date"  # time tracking columns
             }
             
             missing_columns = required_columns - set(columns.keys())
@@ -202,6 +203,14 @@ class InitializeCommand(Command):
                 logger.info(f"✅ priority column exists (type: {priority_col[2]}, default: {priority_col[4]})")
             else:
                 logger.warning("⚠️  priority column missing (may need migration)")
+            
+            # Check for time tracking columns
+            time_tracking_columns = ["estimated_hours", "actual_hours", "started_at", "time_delta_hours", "due_date"]
+            missing_time_cols = [col for col in time_tracking_columns if col not in columns]
+            if missing_time_cols:
+                logger.warning(f"⚠️  Time tracking columns missing: {missing_time_cols} (may need migration)")
+            else:
+                logger.info(f"✅ All time tracking columns exist: {', '.join(time_tracking_columns)}")
             
             # Check for indexes
             cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='tasks'")

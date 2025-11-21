@@ -121,6 +121,7 @@ class SchemaManager:
         query = self._normalize_sql("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER,
                 project_id INTEGER,
                 title TEXT NOT NULL,
                 task_type TEXT NOT NULL CHECK(task_type IN ('concrete', 'abstract', 'epic')),
@@ -135,11 +136,18 @@ class SchemaManager:
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP,
                 notes TEXT,
+                priority TEXT DEFAULT 'medium' 
+                    CHECK(priority IN ('low', 'medium', 'high', 'critical')),
+                estimated_hours REAL,
+                actual_hours REAL,
+                started_at TIMESTAMP,
+                time_delta_hours REAL,
+                due_date TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
             )
         """)
         self._execute_with_logging(cursor, query)
-        # Note: Additional columns (priority, due_date, etc.) added via Alembic migrations
+        # Note: Schema now includes priority and time tracking columns to match migrations
     
     def _create_relationships_schema(self, cursor):
         """Create task relationships table."""
